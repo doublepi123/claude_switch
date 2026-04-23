@@ -27,7 +27,7 @@ cd claude_switch
 | --- | --- | --- |
 | `minimax` | `https://api.minimaxi.com/anthropic` | `MiniMax-M2.7` |
 | `openrouter` | `https://openrouter.ai/api` | `anthropic/claude-sonnet-4.6` |
-| `opencode-go` | `https://opencode.ai/zen/go` | `opencode-go/minimax-m2.7` |
+| `opencode-go` | `https://opencode.ai/zen/go` | `minimax-m2.7` |
 
 ## 安装
 
@@ -195,8 +195,19 @@ cs switch openrouter --api-key sk-or-xxx
 ### 6. 覆盖默认模型
 
 ```bash
-cs switch opencode-go --model opencode-go/glm-5
+cs switch opencode-go --model minimax-m2.7
 ```
+
+对 `opencode-go` 来说，这里应传 OpenCode Go 在 Anthropic 兼容接口下支持的实际模型 ID，例如：
+
+```bash
+cs switch opencode-go --model minimax-m2.7
+cs switch opencode-go --model minimax-m2.5
+```
+
+不要传 `opencode-go/minimax-m2.7` 这类前缀形式；那是 OpenCode 自身配置里使用的格式，不是这里这个 Anthropic 兼容接口要的模型 ID。
+
+这个工具当前把 `opencode-go` 作为 Anthropic 兼容供应商接入，因此应使用文档中对应 `https://opencode.ai/zen/go/v1/messages` 的模型，例如 `minimax-m2.7`、`minimax-m2.5`。
 
 ### 7. 指定 Claude 配置目录
 
@@ -261,8 +272,16 @@ cs switch openrouter --api-key sk-or-xxx
 切换并覆盖模型：
 
 ```bash
-cs switch opencode-go --api-key your-key --model opencode-go/glm-5
+cs switch opencode-go --api-key your-key --model minimax-m2.7
 ```
+
+如果你在使用 `opencode-go` 时看到类似下面的错误：
+
+```text
+401 {"type":"error","error":{"type":"ModelError","message":"Model opencode-go/minimax-m2.7 not supported"}}
+```
+
+把模型名改成裸 ID 即可，例如 `minimax-m2.7`。
 
 ## 测试
 

@@ -63,7 +63,8 @@ func TestDetectProvider(t *testing.T) {
 	}{
 		{baseURL: "https://api.minimaxi.com/anthropic", want: "minimax"},
 		{baseURL: "https://openrouter.ai/api", want: "openrouter"},
-		{baseURL: "https://opencode.ai/zen/go", model: "opencode-go/minimax-m2.7", want: "opencode-go"},
+		{baseURL: "https://opencode.ai/zen/go", model: "minimax-m2.7", want: "opencode-go"},
+		{baseURL: "https://example.com", model: "opencode-go/kimi-k2.5", want: "opencode-go"},
 		{baseURL: "https://example.com", want: "custom"},
 	}
 
