@@ -1,0 +1,18 @@
+.DS_Store
+
+# Binaries
+claude-switch
+claude-switch.exe
+
+# Go build and test artifacts
+*.test
+*.out
+coverage.out
+cover.out
+
+# Local caches
+.gocache/
+
+# IDE files
+.idea/
+.vscode/
