@@ -37,14 +37,14 @@ type AppConfig struct {
 
 var providerPresets = map[string]ProviderPreset{
 	"minimax": {
-		Name:      "MiniMax",
+		Name:      "MiniMax CN Token Plan",
 		BaseURL:   "https://api.minimaxi.com/anthropic",
 		Model:     "MiniMax-M2.7",
 		Haiku:     "MiniMax-M2.7",
 		Sonnet:    "MiniMax-M2.7",
 		Opus:      "MiniMax-M2.7",
 		Website:   "https://platform.minimaxi.com",
-		APIKeyURL: "https://platform.minimaxi.com/subscribe/coding-plan",
+		APIKeyURL: "https://platform.minimaxi.com/docs/token-plan/claude-code",
 		ExtraEnv: map[string]any{
 			"API_TIMEOUT_MS": "3000000",
 			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": 1,
@@ -72,6 +72,11 @@ var providerPresets = map[string]ProviderPreset{
 	},
 }
 
+var providerAliases = map[string]string{
+	"minimax-cn":       "minimax",
+	"minimax-cn-token": "minimax",
+}
+
 var managedEnvKeys = []string{
 	"ANTHROPIC_BASE_URL",
 	"ANTHROPIC_API_KEY",
@@ -93,8 +98,7 @@ func main() {
 
 func run(args []string) error {
 	if len(args) == 0 {
-		printUsage()
-		return nil
+		return cmdConfigure(nil, os.Stdin, os.Stdout)
 	}
 
 	switch args[0] {
@@ -206,7 +210,7 @@ func cmdSetKey(args []string) error {
 	if len(args) != 2 {
 		return errors.New("usage: claude-switch set-key <provider> <api-key>")
 	}
-	provider := normalizeProviderName(args[0])
+	provider := canonicalProviderName(args[0])
 	if _, ok := providerPresets[provider]; !ok {
 		return fmt.Errorf("unsupported provider %q", args[0])
 	}
@@ -237,7 +241,7 @@ func cmdSwitch(args []string) error {
 		return errors.New("usage: claude-switch switch <provider> [--api-key sk-xxx] [--model model-id]")
 	}
 
-	provider := normalizeProviderName(fs.Arg(0))
+	provider := canonicalProviderName(fs.Arg(0))
 	if _, ok := providerPresets[provider]; !ok {
 		return fmt.Errorf("unsupported provider %q", fs.Arg(0))
 	}
@@ -312,6 +316,14 @@ func sortedProviderNames() []string {
 
 func normalizeProviderName(name string) string {
 	return strings.ToLower(strings.TrimSpace(name))
+}
+
+func canonicalProviderName(name string) string {
+	normalized := normalizeProviderName(name)
+	if canonical, ok := providerAliases[normalized]; ok {
+		return canonical
+	}
+	return normalized
 }
 
 func detectProvider(baseURL, model string) string {
@@ -435,7 +447,7 @@ func resolveProviderSelection(input string, names []string) (string, error) {
 		return "", errors.New("provider index out of range")
 	}
 
-	provider := normalizeProviderName(text)
+	provider := canonicalProviderName(text)
 	if _, ok := providerPresets[provider]; !ok {
 		return "", errors.New("unsupported provider")
 	}

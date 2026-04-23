@@ -2,6 +2,8 @@
 
 `claude-switch` 是一个用于切换 Claude Code 后端供应商的 Go 命令行工具，安装后的命令名是 `cs`。
 
+直接输入 `cs` 就会进入 TUI 配置界面。
+
 它会更新 Claude Code 使用的 `settings.json`，让你在不同兼容供应商之间快速切换，同时保留无关配置。
 
 仓库地址：
@@ -28,6 +30,11 @@ cd claude_switch
 | `minimax` | `https://api.minimaxi.com/anthropic` | `MiniMax-M2.7` |
 | `openrouter` | `https://openrouter.ai/api` | `anthropic/claude-sonnet-4.6` |
 | `opencode-go` | `https://opencode.ai/zen/go` | `minimax-m2.7` |
+
+其中 `minimax` 按 MiniMax CN Token Plan 配置，参考官方 CN 文档：
+
+- 文本生成: https://platform.minimaxi.com/docs/guides/text-generation
+- Claude Code: https://platform.minimaxi.com/docs/token-plan/claude-code
 
 ## 安装
 
@@ -140,6 +147,12 @@ cs list
 ### 2. 交互式配置
 
 ```bash
+cs
+```
+
+或：
+
+```bash
 cs configure
 ```
 
@@ -176,6 +189,13 @@ cs set-key minimax sk-xxx
 cs set-key openrouter sk-or-xxx
 ```
 
+`minimax` 也支持以下别名：
+
+```bash
+cs set-key minimax-cn sk-xxx
+cs set-key minimax-cn-token sk-xxx
+```
+
 保存后会写入：
 
 ```text
@@ -190,6 +210,19 @@ cs set-key openrouter sk-or-xxx
 cs switch minimax
 cs switch openrouter
 cs switch opencode-go
+```
+
+`minimax` 默认按 MiniMax 中国区 Token Plan 接入：
+
+```bash
+cs switch minimax
+```
+
+等价别名：
+
+```bash
+cs switch minimax-cn
+cs switch minimax-cn-token
 ```
 
 如果没有提前保存 API Key，也可以在切换时直接传入：

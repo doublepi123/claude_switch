@@ -88,6 +88,7 @@ func TestResolveProviderSelection(t *testing.T) {
 	}{
 		{input: "1", want: names[0], ok: true},
 		{input: " openrouter ", want: "openrouter", ok: true},
+		{input: "minimax-cn-token", want: "minimax", ok: true},
 		{input: "99", ok: false},
 		{input: "unknown", ok: false},
 	}
@@ -106,6 +107,21 @@ func TestResolveProviderSelection(t *testing.T) {
 
 		if err == nil {
 			t.Fatalf("resolveProviderSelection(%q) expected error, got %q", tc.input, got)
+		}
+	}
+}
+
+func TestCanonicalProviderName(t *testing.T) {
+	cases := map[string]string{
+		"minimax":          "minimax",
+		"MiniMax-CN":       "minimax",
+		"minimax-cn-token": "minimax",
+		" openrouter ":     "openrouter",
+	}
+
+	for input, want := range cases {
+		if got := canonicalProviderName(input); got != want {
+			t.Fatalf("canonicalProviderName(%q) = %q, want %q", input, got, want)
 		}
 	}
 }
