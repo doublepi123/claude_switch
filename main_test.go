@@ -36,6 +36,9 @@ func TestApplyPresetPreservesUnmanagedFields(t *testing.T) {
 	if got := env["ANTHROPIC_AUTH_TOKEN"]; got != "sk-test" {
 		t.Fatalf("unexpected auth token: %v", got)
 	}
+	if got := env["ANTHROPIC_API_KEY"]; got != "sk-test" {
+		t.Fatalf("unexpected api key: %v", got)
+	}
 }
 
 func TestApplyPresetOverrideModel(t *testing.T) {
@@ -149,13 +152,16 @@ func TestCmdConfigureSwitchesAndStoresAPIKey(t *testing.T) {
 	if got := env["ANTHROPIC_AUTH_TOKEN"]; got != "sk-interactive" {
 		t.Fatalf("auth token = %v, want %v", got, "sk-interactive")
 	}
+	if got := env["ANTHROPIC_API_KEY"]; got != "sk-interactive" {
+		t.Fatalf("api key = %v, want %v", got, "sk-interactive")
+	}
 
 	if !strings.Contains(output.String(), "saved api key for openrouter") {
 		t.Fatalf("expected save message in output, got %q", output.String())
 	}
 }
 
-func TestCmdConfigureKeepsExistingAPIKeyOnBlankInput(t *testing.T) {
+func TestCmdConfigureReusesExistingAPIKeyWithoutPrompting(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 
@@ -169,7 +175,7 @@ func TestCmdConfigureKeepsExistingAPIKeyOnBlankInput(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	input := strings.NewReader("minimax\n\n")
+	input := strings.NewReader("minimax\n")
 	output := &bytes.Buffer{}
 
 	if err := cmdConfigure(nil, input, output); err != nil {
@@ -189,7 +195,68 @@ func TestCmdConfigureKeepsExistingAPIKeyOnBlankInput(t *testing.T) {
 		t.Fatalf("stored api key = %q, want %q", got, "sk-existing")
 	}
 
-	if !strings.Contains(output.String(), "Press Enter to keep it") {
-		t.Fatalf("expected keep-existing prompt, got %q", output.String())
+	if strings.Contains(output.String(), "API key:") {
+		t.Fatalf("did not expect api key prompt, got %q", output.String())
+	}
+	if !strings.Contains(output.String(), "using saved api key for minimax") {
+		t.Fatalf("expected saved-key reuse message, got %q", output.String())
+	}
+}
+
+func TestCmdConfigureResetKeyPromptsForNewValue(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := AppConfig{
+		Providers: map[string]StoredProvider{
+			"minimax": {APIKey: "sk-existing"},
+		},
+	}
+	configPath := filepath.Join(home, ".claude-switch", "config.json")
+	if err := writeJSONAtomic(configPath, cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	input := strings.NewReader("minimax\nsk-new\n")
+	output := &bytes.Buffer{}
+
+	if err := cmdConfigure([]string{"--reset-key"}, input, output); err != nil {
+		t.Fatalf("cmdConfigure returned error: %v", err)
+	}
+
+	configBytes, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+
+	var updated AppConfig
+	if err := json.Unmarshal(configBytes, &updated); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+	if got := updated.Providers["minimax"].APIKey; got != "sk-new" {
+		t.Fatalf("stored api key = %q, want %q", got, "sk-new")
+	}
+
+	if !strings.Contains(output.String(), "API key:") {
+		t.Fatalf("expected api key prompt, got %q", output.String())
+	}
+}
+
+func TestRenderConfigureScreenShowsSavedState(t *testing.T) {
+	cfg := &AppConfig{
+		Providers: map[string]StoredProvider{
+			"openrouter": {APIKey: "sk-existing"},
+		},
+	}
+	output := &bytes.Buffer{}
+
+	renderConfigureScreen(output, sortedProviderNames(), cfg, "minimax")
+
+	text := output.String()
+	if !strings.Contains(text, "minimax [current]") {
+		t.Fatalf("expected current provider marker, got %q", text)
+	}
+	if !strings.Contains(text, "openrouter [saved-key]") {
+		t.Fatalf("expected saved-key marker, got %q", text)
 	}
 }

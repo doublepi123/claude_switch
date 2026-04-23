@@ -16,7 +16,7 @@ cd claude_switch
 - 支持列出当前内置供应商
 - 支持查看当前 Claude Code 指向的供应商
 - 支持保存各供应商 API Key
-- 支持交互式选择供应商并配置 API Key
+- 支持 TUI 交互式选择供应商并配置 API Key
 - 支持一键切换 `~/.claude/settings.json`
 - 切换前自动备份原始配置
 - 仅更新受管理的 `env` 字段，避免覆盖其他自定义配置
@@ -110,12 +110,14 @@ go run .
 cs configure
 ```
 
-命令会引导你：
+命令会以 TUI 方式引导你：
 
 - 选择供应商
-- 输入或更新 API Key
+- 首次为该供应商输入 API Key
 - 自动保存配置
 - 立即切换当前 Claude Code 到所选供应商
+
+如果该供应商之前已经保存过 API Key，`cs configure` 会直接复用，不会要求你重复输入。
 
 ### 2. 确认当前生效配置
 
@@ -141,7 +143,13 @@ cs list
 cs configure
 ```
 
-如果你已经保存过某个供应商的 API Key，重新执行 `cs configure` 时，按回车即可保留原有 Key。
+如果你已经保存过某个供应商的 API Key，重新执行 `cs configure` 时会直接复用。
+
+如果你想强制重填该供应商的 API Key：
+
+```bash
+cs configure --reset-key
+```
 
 ### 3. 查看当前配置
 
@@ -233,6 +241,7 @@ cs switch minimax --claude-dir /path/to/.claude
 当前受管理的环境变量包括：
 
 - `ANTHROPIC_BASE_URL`
+- `ANTHROPIC_API_KEY`
 - `ANTHROPIC_AUTH_TOKEN`
 - `ANTHROPIC_MODEL`
 - `ANTHROPIC_DEFAULT_HAIKU_MODEL`
@@ -240,6 +249,13 @@ cs switch minimax --claude-dir /path/to/.claude
 - `ANTHROPIC_DEFAULT_OPUS_MODEL`
 - `API_TIMEOUT_MS`
 - `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`
+
+其中 API Key 会同时写入：
+
+- `ANTHROPIC_API_KEY`
+- `ANTHROPIC_AUTH_TOKEN`
+
+这样可以同时兼容只读取 `X-Api-Key` 或 `Authorization: Bearer` 的 Anthropic 兼容上游。
 
 ## 示例
 

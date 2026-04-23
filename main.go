@@ -74,6 +74,7 @@ var providerPresets = map[string]ProviderPreset{
 
 var managedEnvKeys = []string{
 	"ANTHROPIC_BASE_URL",
+	"ANTHROPIC_API_KEY",
 	"ANTHROPIC_AUTH_TOKEN",
 	"ANTHROPIC_MODEL",
 	"ANTHROPIC_DEFAULT_HAIKU_MODEL",
@@ -128,11 +129,12 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 	fs := flag.NewFlagSet("configure", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	claudeDir := fs.String("claude-dir", "", "override Claude config dir")
+	resetKey := fs.Bool("reset-key", false, "force re-enter api key for the selected provider")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: claude-switch configure [--claude-dir DIR]")
+		return errors.New("usage: claude-switch configure [--claude-dir DIR] [--reset-key]")
 	}
 
 	cfg, configPath, err := loadAppConfig()
@@ -141,27 +143,30 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 	}
 
 	reader := bufio.NewReader(in)
-	provider, err := promptProviderSelection(reader, out)
+	provider, err := promptProviderSelection(reader, out, cfg, currentConfiguredProvider(*claudeDir))
 	if err != nil {
 		return err
 	}
 
 	existingKey := strings.TrimSpace(cfg.Providers[provider].APIKey)
-	apiKey, err := promptAPIKey(reader, out, provider, existingKey)
-	if err != nil {
-		return err
-	}
-
-	cfg.Providers[provider] = StoredProvider{APIKey: apiKey}
-	if err := writeJSONAtomic(configPath, cfg); err != nil {
-		return err
+	apiKey := existingKey
+	if apiKey == "" || *resetKey {
+		apiKey, err = promptAPIKey(reader, out, provider)
+		if err != nil {
+			return err
+		}
+		cfg.Providers[provider] = StoredProvider{APIKey: apiKey}
+		if err := writeJSONAtomic(configPath, cfg); err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "saved api key for %s in %s\n", provider, configPath)
+	} else {
+		fmt.Fprintf(out, "using saved api key for %s\n", provider)
 	}
 
 	if err := switchProvider(provider, apiKey, "", *claudeDir); err != nil {
 		return err
 	}
-
-	fmt.Fprintf(out, "saved api key for %s in %s\n", provider, configPath)
 	return nil
 }
 
@@ -285,7 +290,7 @@ func printUsage() {
 
 Usage:
   claude-switch list
-  claude-switch configure [--claude-dir DIR]
+  claude-switch configure [--claude-dir DIR] [--reset-key]
   claude-switch current [--claude-dir DIR]
   claude-switch set-key <provider> <api-key>
   claude-switch switch <provider> [--api-key sk-xxx] [--model model-id] [--claude-dir DIR]
@@ -329,15 +334,11 @@ func effectiveModel(preset ProviderPreset, override string) string {
 	return preset.Model
 }
 
-func promptProviderSelection(reader *bufio.Reader, out io.Writer) (string, error) {
+func promptProviderSelection(reader *bufio.Reader, out io.Writer, cfg *AppConfig, currentProvider string) (string, error) {
 	names := sortedProviderNames()
-	fmt.Fprintln(out, "Select a provider:")
-	for i, name := range names {
-		preset := providerPresets[name]
-		fmt.Fprintf(out, "  %d) %s (%s)\n", i+1, name, preset.BaseURL)
-	}
 
 	for {
+		renderConfigureScreen(out, names, cfg, currentProvider)
 		fmt.Fprint(out, "Provider: ")
 		text, err := readLine(reader)
 		if err != nil {
@@ -347,17 +348,12 @@ func promptProviderSelection(reader *bufio.Reader, out io.Writer) (string, error
 		if err == nil {
 			return provider, nil
 		}
-		fmt.Fprintf(out, "Invalid provider: %s\n", strings.TrimSpace(text))
+		fmt.Fprintf(out, "\nInvalid provider: %s\n", strings.TrimSpace(text))
 	}
 }
 
-func promptAPIKey(reader *bufio.Reader, out io.Writer, provider, existingKey string) (string, error) {
-	if existingKey != "" {
-		fmt.Fprintf(out, "API key for %s already exists. Press Enter to keep it, or paste a new key.\n", provider)
-	} else {
-		fmt.Fprintf(out, "Enter API key for %s:\n", provider)
-	}
-
+func promptAPIKey(reader *bufio.Reader, out io.Writer, provider string) (string, error) {
+	fmt.Fprintf(out, "Enter API key for %s:\n", provider)
 	for {
 		fmt.Fprint(out, "API key: ")
 		text, err := readLine(reader)
@@ -365,14 +361,54 @@ func promptAPIKey(reader *bufio.Reader, out io.Writer, provider, existingKey str
 			return "", err
 		}
 		key := strings.TrimSpace(text)
-		if key == "" && existingKey != "" {
-			return existingKey, nil
-		}
 		if key != "" {
 			return key, nil
 		}
 		fmt.Fprintln(out, "API key cannot be empty.")
 	}
+}
+
+func renderConfigureScreen(out io.Writer, names []string, cfg *AppConfig, currentProvider string) {
+	fmt.Fprint(out, "\033[H\033[2J")
+	fmt.Fprintln(out, "claude-switch")
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "Configure provider")
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "Select a provider by number or name:")
+	for i, name := range names {
+		preset := providerPresets[name]
+		status := []string{}
+		if name == currentProvider {
+			status = append(status, "current")
+		}
+		if strings.TrimSpace(cfg.Providers[name].APIKey) != "" {
+			status = append(status, "saved-key")
+		}
+
+		label := ""
+		if len(status) > 0 {
+			label = " [" + strings.Join(status, ", ") + "]"
+		}
+
+		fmt.Fprintf(out, "  %d) %s%s\n", i+1, name, label)
+		fmt.Fprintf(out, "     %s\n", preset.BaseURL)
+		fmt.Fprintf(out, "     default model: %s\n", preset.Model)
+	}
+	fmt.Fprintln(out)
+}
+
+func currentConfiguredProvider(claudeDir string) string {
+	root, err := readJSONMap(claudeSettingsPath(claudeDir))
+	if err != nil {
+		return ""
+	}
+	env := nestedMap(root, "env")
+	if env == nil {
+		return ""
+	}
+	baseURL, _ := env["ANTHROPIC_BASE_URL"].(string)
+	model, _ := env["ANTHROPIC_MODEL"].(string)
+	return detectProvider(baseURL, model)
 }
 
 func readLine(reader *bufio.Reader) (string, error) {
@@ -413,6 +449,7 @@ func applyPreset(root map[string]any, preset ProviderPreset, apiKey, overrideMod
 	}
 
 	env["ANTHROPIC_BASE_URL"] = preset.BaseURL
+	env["ANTHROPIC_API_KEY"] = apiKey
 	env["ANTHROPIC_AUTH_TOKEN"] = apiKey
 	env["ANTHROPIC_MODEL"] = effectiveModel(preset, overrideModel)
 	env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = preset.Haiku
