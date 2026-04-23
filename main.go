@@ -1,13 +1,16 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -96,6 +99,8 @@ func run(args []string) error {
 	switch args[0] {
 	case "list":
 		return cmdList()
+	case "configure":
+		return cmdConfigure(args[1:], os.Stdin, os.Stdout)
 	case "current":
 		return cmdCurrent(args[1:])
 	case "set-key":
@@ -116,6 +121,47 @@ func cmdList() error {
 		preset := providerPresets[name]
 		fmt.Printf("%s\t%s\t%s\n", name, preset.BaseURL, preset.Model)
 	}
+	return nil
+}
+
+func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
+	fs := flag.NewFlagSet("configure", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	claudeDir := fs.String("claude-dir", "", "override Claude config dir")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("usage: claude-switch configure [--claude-dir DIR]")
+	}
+
+	cfg, configPath, err := loadAppConfig()
+	if err != nil {
+		return err
+	}
+
+	reader := bufio.NewReader(in)
+	provider, err := promptProviderSelection(reader, out)
+	if err != nil {
+		return err
+	}
+
+	existingKey := strings.TrimSpace(cfg.Providers[provider].APIKey)
+	apiKey, err := promptAPIKey(reader, out, provider, existingKey)
+	if err != nil {
+		return err
+	}
+
+	cfg.Providers[provider] = StoredProvider{APIKey: apiKey}
+	if err := writeJSONAtomic(configPath, cfg); err != nil {
+		return err
+	}
+
+	if err := switchProvider(provider, apiKey, "", *claudeDir); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(out, "saved api key for %s in %s\n", provider, configPath)
 	return nil
 }
 
@@ -187,8 +233,7 @@ func cmdSwitch(args []string) error {
 	}
 
 	provider := normalizeProviderName(fs.Arg(0))
-	preset, ok := providerPresets[provider]
-	if !ok {
+	if _, ok := providerPresets[provider]; !ok {
 		return fmt.Errorf("unsupported provider %q", fs.Arg(0))
 	}
 
@@ -204,7 +249,16 @@ func cmdSwitch(args []string) error {
 		return fmt.Errorf("missing api key for %s, run `claude-switch set-key %s <api-key>` or pass --api-key", provider, provider)
 	}
 
-	settingsPath := claudeSettingsPath(*claudeDir)
+	return switchProvider(provider, key, strings.TrimSpace(*model), *claudeDir)
+}
+
+func switchProvider(provider, apiKey, modelOverride, claudeDir string) error {
+	preset, ok := providerPresets[provider]
+	if !ok {
+		return fmt.Errorf("unsupported provider %q", provider)
+	}
+
+	settingsPath := claudeSettingsPath(claudeDir)
 	root, err := readJSONMap(settingsPath)
 	if err != nil {
 		return err
@@ -214,7 +268,7 @@ func cmdSwitch(args []string) error {
 		return err
 	}
 
-	applyPreset(root, preset, key, strings.TrimSpace(*model))
+	applyPreset(root, preset, apiKey, modelOverride)
 	if err := writeJSONAtomic(settingsPath, root); err != nil {
 		return err
 	}
@@ -222,7 +276,7 @@ func cmdSwitch(args []string) error {
 	fmt.Printf("switched Claude to %s\n", preset.Name)
 	fmt.Printf("settings: %s\n", settingsPath)
 	fmt.Printf("base_url: %s\n", preset.BaseURL)
-	fmt.Printf("model: %s\n", effectiveModel(preset, strings.TrimSpace(*model)))
+	fmt.Printf("model: %s\n", effectiveModel(preset, modelOverride))
 	return nil
 }
 
@@ -231,6 +285,7 @@ func printUsage() {
 
 Usage:
   claude-switch list
+  claude-switch configure [--claude-dir DIR]
   claude-switch current [--claude-dir DIR]
   claude-switch set-key <provider> <api-key>
   claude-switch switch <provider> [--api-key sk-xxx] [--model model-id] [--claude-dir DIR]
@@ -272,6 +327,83 @@ func effectiveModel(preset ProviderPreset, override string) string {
 		return override
 	}
 	return preset.Model
+}
+
+func promptProviderSelection(reader *bufio.Reader, out io.Writer) (string, error) {
+	names := sortedProviderNames()
+	fmt.Fprintln(out, "Select a provider:")
+	for i, name := range names {
+		preset := providerPresets[name]
+		fmt.Fprintf(out, "  %d) %s (%s)\n", i+1, name, preset.BaseURL)
+	}
+
+	for {
+		fmt.Fprint(out, "Provider: ")
+		text, err := readLine(reader)
+		if err != nil {
+			return "", err
+		}
+		provider, err := resolveProviderSelection(text, names)
+		if err == nil {
+			return provider, nil
+		}
+		fmt.Fprintf(out, "Invalid provider: %s\n", strings.TrimSpace(text))
+	}
+}
+
+func promptAPIKey(reader *bufio.Reader, out io.Writer, provider, existingKey string) (string, error) {
+	if existingKey != "" {
+		fmt.Fprintf(out, "API key for %s already exists. Press Enter to keep it, or paste a new key.\n", provider)
+	} else {
+		fmt.Fprintf(out, "Enter API key for %s:\n", provider)
+	}
+
+	for {
+		fmt.Fprint(out, "API key: ")
+		text, err := readLine(reader)
+		if err != nil {
+			return "", err
+		}
+		key := strings.TrimSpace(text)
+		if key == "" && existingKey != "" {
+			return existingKey, nil
+		}
+		if key != "" {
+			return key, nil
+		}
+		fmt.Fprintln(out, "API key cannot be empty.")
+	}
+}
+
+func readLine(reader *bufio.Reader) (string, error) {
+	text, err := reader.ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) {
+		return "", err
+	}
+	if errors.Is(err, io.EOF) && text == "" {
+		return "", io.EOF
+	}
+	return strings.TrimRight(text, "\r\n"), nil
+}
+
+func resolveProviderSelection(input string, names []string) (string, error) {
+	text := strings.TrimSpace(input)
+	if text == "" {
+		return "", errors.New("empty provider")
+	}
+
+	if idx, err := strconv.Atoi(text); err == nil {
+		if idx >= 1 && idx <= len(names) {
+			return names[idx-1], nil
+		}
+		return "", errors.New("provider index out of range")
+	}
+
+	provider := normalizeProviderName(text)
+	if _, ok := providerPresets[provider]; !ok {
+		return "", errors.New("unsupported provider")
+	}
+	return provider, nil
 }
 
 func applyPreset(root map[string]any, preset ProviderPreset, apiKey, overrideModel string) {

@@ -16,6 +16,7 @@ cd claude_switch
 - 支持列出当前内置供应商
 - 支持查看当前 Claude Code 指向的供应商
 - 支持保存各供应商 API Key
+- 支持交互式选择供应商并配置 API Key
 - 支持一键切换 `~/.claude/settings.json`
 - 切换前自动备份原始配置
 - 仅更新受管理的 `env` 字段，避免覆盖其他自定义配置
@@ -103,33 +104,20 @@ go run .
 
 第一次使用建议按下面顺序执行：
 
-### 1. 查看支持的供应商
+### 1. 直接执行交互式配置
 
 ```bash
-cs list
+cs configure
 ```
 
-### 2. 保存 API Key
+命令会引导你：
 
-例如保存 MiniMax 的 Key：
+- 选择供应商
+- 输入或更新 API Key
+- 自动保存配置
+- 立即切换当前 Claude Code 到所选供应商
 
-```bash
-cs set-key minimax sk-xxx
-```
-
-也可以保存 OpenRouter：
-
-```bash
-cs set-key openrouter sk-or-xxx
-```
-
-### 3. 切换到目标供应商
-
-```bash
-cs switch minimax
-```
-
-### 4. 确认当前生效配置
+### 2. 确认当前生效配置
 
 ```bash
 cs current
@@ -147,7 +135,15 @@ cs list
 
 输出包含供应商名称、Base URL 和默认模型。
 
-### 2. 查看当前配置
+### 2. 交互式配置
+
+```bash
+cs configure
+```
+
+如果你已经保存过某个供应商的 API Key，重新执行 `cs configure` 时，按回车即可保留原有 Key。
+
+### 3. 查看当前配置
 
 ```bash
 cs current
@@ -165,7 +161,7 @@ cs current
 cs current --claude-dir /path/to/.claude
 ```
 
-### 3. 保存 API Key
+### 4. 保存 API Key
 
 ```bash
 cs set-key minimax sk-xxx
@@ -180,7 +176,7 @@ cs set-key openrouter sk-or-xxx
 
 如果你不想落盘保存，也可以在切换时临时传入 `--api-key`。
 
-### 4. 切换供应商
+### 5. 切换供应商
 
 ```bash
 cs switch minimax
@@ -196,13 +192,13 @@ cs switch openrouter --api-key sk-or-xxx
 
 如果本地还没有 `~/.claude/settings.json`，工具会自动创建它。
 
-### 5. 覆盖默认模型
+### 6. 覆盖默认模型
 
 ```bash
 cs switch opencode-go --model opencode-go/glm-5
 ```
 
-### 6. 指定 Claude 配置目录
+### 7. 指定 Claude 配置目录
 
 ```bash
 cs switch minimax --claude-dir /path/to/.claude
@@ -246,6 +242,13 @@ cs set-key minimax sk-xxx
 
 ```bash
 cs switch minimax
+cs current
+```
+
+首次配置推荐直接使用交互模式：
+
+```bash
+cs configure
 cs current
 ```
 

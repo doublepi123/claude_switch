@@ -1,6 +1,13 @@
 package main
 
-import "testing"
+import (
+	"bytes"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 func TestApplyPresetPreservesUnmanagedFields(t *testing.T) {
 	root := map[string]any{
@@ -64,5 +71,124 @@ func TestDetectProvider(t *testing.T) {
 		if got := detectProvider(tc.baseURL, tc.model); got != tc.want {
 			t.Fatalf("detectProvider(%q, %q) = %q, want %q", tc.baseURL, tc.model, got, tc.want)
 		}
+	}
+}
+
+func TestResolveProviderSelection(t *testing.T) {
+	names := sortedProviderNames()
+
+	cases := []struct {
+		input string
+		want  string
+		ok    bool
+	}{
+		{input: "1", want: names[0], ok: true},
+		{input: " openrouter ", want: "openrouter", ok: true},
+		{input: "99", ok: false},
+		{input: "unknown", ok: false},
+	}
+
+	for _, tc := range cases {
+		got, err := resolveProviderSelection(tc.input, names)
+		if tc.ok {
+			if err != nil {
+				t.Fatalf("resolveProviderSelection(%q) returned error: %v", tc.input, err)
+			}
+			if got != tc.want {
+				t.Fatalf("resolveProviderSelection(%q) = %q, want %q", tc.input, got, tc.want)
+			}
+			continue
+		}
+
+		if err == nil {
+			t.Fatalf("resolveProviderSelection(%q) expected error, got %q", tc.input, got)
+		}
+	}
+}
+
+func TestCmdConfigureSwitchesAndStoresAPIKey(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	claudeDir := filepath.Join(home, "custom-claude")
+	input := strings.NewReader("openrouter\nsk-interactive\n")
+	output := &bytes.Buffer{}
+
+	if err := cmdConfigure([]string{"--claude-dir", claudeDir}, input, output); err != nil {
+		t.Fatalf("cmdConfigure returned error: %v", err)
+	}
+
+	configBytes, err := os.ReadFile(filepath.Join(home, ".claude-switch", "config.json"))
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+
+	var cfg AppConfig
+	if err := json.Unmarshal(configBytes, &cfg); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+	if got := cfg.Providers["openrouter"].APIKey; got != "sk-interactive" {
+		t.Fatalf("stored api key = %q, want %q", got, "sk-interactive")
+	}
+
+	settingsBytes, err := os.ReadFile(filepath.Join(claudeDir, "settings.json"))
+	if err != nil {
+		t.Fatalf("read settings: %v", err)
+	}
+
+	var settings map[string]any
+	if err := json.Unmarshal(settingsBytes, &settings); err != nil {
+		t.Fatalf("unmarshal settings: %v", err)
+	}
+
+	env := settings["env"].(map[string]any)
+	if got := env["ANTHROPIC_BASE_URL"]; got != "https://openrouter.ai/api" {
+		t.Fatalf("base url = %v, want %v", got, "https://openrouter.ai/api")
+	}
+	if got := env["ANTHROPIC_AUTH_TOKEN"]; got != "sk-interactive" {
+		t.Fatalf("auth token = %v, want %v", got, "sk-interactive")
+	}
+
+	if !strings.Contains(output.String(), "saved api key for openrouter") {
+		t.Fatalf("expected save message in output, got %q", output.String())
+	}
+}
+
+func TestCmdConfigureKeepsExistingAPIKeyOnBlankInput(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := AppConfig{
+		Providers: map[string]StoredProvider{
+			"minimax": {APIKey: "sk-existing"},
+		},
+	}
+	configPath := filepath.Join(home, ".claude-switch", "config.json")
+	if err := writeJSONAtomic(configPath, cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	input := strings.NewReader("minimax\n\n")
+	output := &bytes.Buffer{}
+
+	if err := cmdConfigure(nil, input, output); err != nil {
+		t.Fatalf("cmdConfigure returned error: %v", err)
+	}
+
+	configBytes, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+
+	var updated AppConfig
+	if err := json.Unmarshal(configBytes, &updated); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+	if got := updated.Providers["minimax"].APIKey; got != "sk-existing" {
+		t.Fatalf("stored api key = %q, want %q", got, "sk-existing")
+	}
+
+	if !strings.Contains(output.String(), "Press Enter to keep it") {
+		t.Fatalf("expected keep-existing prompt, got %q", output.String())
 	}
 }
