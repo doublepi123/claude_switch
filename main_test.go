@@ -59,6 +59,134 @@ func TestApplyPresetOverrideModel(t *testing.T) {
 	}
 }
 
+func TestApplyPresetOpenRouterOfficialModelKeepsTierMapping(t *testing.T) {
+	root := map[string]any{}
+	applyPreset(root, providerPresets["openrouter"], "sk-test", "anthropic/claude-opus-4.7")
+
+	env := root["env"].(map[string]any)
+	if got := env["ANTHROPIC_MODEL"]; got != "anthropic/claude-opus-4.7" {
+		t.Fatalf("model = %v, want %v", got, "anthropic/claude-opus-4.7")
+	}
+	if got := env["ANTHROPIC_DEFAULT_HAIKU_MODEL"]; got != "anthropic/claude-haiku-4.5" {
+		t.Fatalf("haiku model = %v, want %v", got, "anthropic/claude-haiku-4.5")
+	}
+	if got := env["ANTHROPIC_DEFAULT_SONNET_MODEL"]; got != "anthropic/claude-sonnet-4.6" {
+		t.Fatalf("sonnet model = %v, want %v", got, "anthropic/claude-sonnet-4.6")
+	}
+	if got := env["ANTHROPIC_DEFAULT_OPUS_MODEL"]; got != "anthropic/claude-opus-4.7" {
+		t.Fatalf("opus model = %v, want %v", got, "anthropic/claude-opus-4.7")
+	}
+}
+
+func TestApplyPresetOpenRouterCustomModelOverridesAllTiers(t *testing.T) {
+	root := map[string]any{}
+	applyPreset(root, providerPresets["openrouter"], "sk-test", "openrouter/custom-model")
+
+	env := root["env"].(map[string]any)
+	for _, key := range []string{
+		"ANTHROPIC_MODEL",
+		"ANTHROPIC_DEFAULT_HAIKU_MODEL",
+		"ANTHROPIC_DEFAULT_SONNET_MODEL",
+		"ANTHROPIC_DEFAULT_OPUS_MODEL",
+	} {
+		if got := env[key]; got != "openrouter/custom-model" {
+			t.Fatalf("expected %s to be openrouter/custom-model, got %v", key, got)
+		}
+	}
+}
+
+func TestResolveProviderPresetOpenRouterSavedCustomModelOverridesAllTiers(t *testing.T) {
+	cfg := &AppConfig{
+		Providers: map[string]StoredProvider{
+			"openrouter": {Model: "openrouter/custom-model"},
+		},
+	}
+
+	preset, err := resolveProviderPreset("openrouter", cfg)
+	if err != nil {
+		t.Fatalf("resolveProviderPreset returned error: %v", err)
+	}
+
+	if got := preset.Model; got != "openrouter/custom-model" {
+		t.Fatalf("model = %v, want %v", got, "openrouter/custom-model")
+	}
+	for name, got := range map[string]string{
+		"haiku":  preset.Haiku,
+		"sonnet": preset.Sonnet,
+		"opus":   preset.Opus,
+	} {
+		if got != "openrouter/custom-model" {
+			t.Fatalf("%s model = %v, want %v", name, got, "openrouter/custom-model")
+		}
+	}
+}
+
+func TestResolveProviderPresetOpenRouterSavedOfficialModelKeepsTierMapping(t *testing.T) {
+	cfg := &AppConfig{
+		Providers: map[string]StoredProvider{
+			"openrouter": {Model: "anthropic/claude-opus-4.7"},
+		},
+	}
+
+	preset, err := resolveProviderPreset("openrouter", cfg)
+	if err != nil {
+		t.Fatalf("resolveProviderPreset returned error: %v", err)
+	}
+
+	if got := preset.Model; got != "anthropic/claude-opus-4.7" {
+		t.Fatalf("model = %v, want %v", got, "anthropic/claude-opus-4.7")
+	}
+	if got := preset.Haiku; got != "anthropic/claude-haiku-4.5" {
+		t.Fatalf("haiku model = %v, want %v", got, "anthropic/claude-haiku-4.5")
+	}
+	if got := preset.Sonnet; got != "anthropic/claude-sonnet-4.6" {
+		t.Fatalf("sonnet model = %v, want %v", got, "anthropic/claude-sonnet-4.6")
+	}
+	if got := preset.Opus; got != "anthropic/claude-opus-4.7" {
+		t.Fatalf("opus model = %v, want %v", got, "anthropic/claude-opus-4.7")
+	}
+}
+
+func TestSwitchProviderOpenRouterOfficialOverrideResetsSavedCustomTierMapping(t *testing.T) {
+	claudeDir := t.TempDir()
+	cfg := &AppConfig{
+		Providers: map[string]StoredProvider{
+			"openrouter": {
+				APIKey: "sk-existing",
+				Model:  "openrouter/custom-model",
+			},
+		},
+	}
+
+	if err := switchProvider("openrouter", cfg, "sk-existing", "anthropic/claude-opus-4.7", claudeDir); err != nil {
+		t.Fatalf("switchProvider returned error: %v", err)
+	}
+
+	settingsBytes, err := os.ReadFile(filepath.Join(claudeDir, "settings.json"))
+	if err != nil {
+		t.Fatalf("read settings: %v", err)
+	}
+
+	var settings map[string]any
+	if err := json.Unmarshal(settingsBytes, &settings); err != nil {
+		t.Fatalf("unmarshal settings: %v", err)
+	}
+
+	env := settings["env"].(map[string]any)
+	if got := env["ANTHROPIC_MODEL"]; got != "anthropic/claude-opus-4.7" {
+		t.Fatalf("model = %v, want %v", got, "anthropic/claude-opus-4.7")
+	}
+	if got := env["ANTHROPIC_DEFAULT_HAIKU_MODEL"]; got != "anthropic/claude-haiku-4.5" {
+		t.Fatalf("haiku model = %v, want %v", got, "anthropic/claude-haiku-4.5")
+	}
+	if got := env["ANTHROPIC_DEFAULT_SONNET_MODEL"]; got != "anthropic/claude-sonnet-4.6" {
+		t.Fatalf("sonnet model = %v, want %v", got, "anthropic/claude-sonnet-4.6")
+	}
+	if got := env["ANTHROPIC_DEFAULT_OPUS_MODEL"]; got != "anthropic/claude-opus-4.7" {
+		t.Fatalf("opus model = %v, want %v", got, "anthropic/claude-opus-4.7")
+	}
+}
+
 func TestDetectProvider(t *testing.T) {
 	cases := []struct {
 		baseURL string
@@ -173,6 +301,15 @@ func TestCmdConfigureSwitchesAndStoresAPIKey(t *testing.T) {
 	}
 	if _, ok := env["ANTHROPIC_AUTH_TOKEN"]; ok {
 		t.Fatalf("expected auth token to be unset")
+	}
+	if got := env["ANTHROPIC_DEFAULT_HAIKU_MODEL"]; got != "anthropic/claude-haiku-4.5" {
+		t.Fatalf("haiku model = %v, want %v", got, "anthropic/claude-haiku-4.5")
+	}
+	if got := env["ANTHROPIC_DEFAULT_SONNET_MODEL"]; got != "anthropic/claude-sonnet-4.6" {
+		t.Fatalf("sonnet model = %v, want %v", got, "anthropic/claude-sonnet-4.6")
+	}
+	if got := env["ANTHROPIC_DEFAULT_OPUS_MODEL"]; got != "anthropic/claude-opus-4.7" {
+		t.Fatalf("opus model = %v, want %v", got, "anthropic/claude-opus-4.7")
 	}
 
 	if !strings.Contains(output.String(), "saved provider config for openrouter") {

@@ -47,6 +47,7 @@ cd claude_switch
 
 - `minimax-cn` 对应 MiniMax 中国区 Token Plan
 - `minimax-global` 对应 MiniMax 国际区 Token Plan
+- `openrouter` 默认使用 OpenRouter 官方 Claude 映射：haiku、sonnet、opus 会分别写入对应的官方模型；如果输入自定义模型名，则三档都会使用这个自定义模型
 
 MiniMax 中国区参考官方 CN 文档：
 
@@ -314,6 +315,14 @@ cs switch opencode-go --model minimax-m2.5
 这个工具当前把 `opencode-go` 作为 Anthropic 兼容供应商接入，因此应使用文档中对应 `https://opencode.ai/zen/go/v1/messages` 的模型，例如 `minimax-m2.7`、`minimax-m2.5`。
 
 对于预设 provider，如果你想使用未内置的模型名，也可以在 TUI 的模型页按 `c` 直接输入任意模型名，后续会作为该 provider 的默认模型保存。
+
+对 `openrouter` 来说，选择内置的 Claude 模型时会保留官方三档映射：
+
+- `ANTHROPIC_DEFAULT_HAIKU_MODEL=anthropic/claude-haiku-4.5`
+- `ANTHROPIC_DEFAULT_SONNET_MODEL=anthropic/claude-sonnet-4.6`
+- `ANTHROPIC_DEFAULT_OPUS_MODEL=anthropic/claude-opus-4.7`
+
+如果通过 `--model` 或 TUI 自定义模型输入未内置的模型名，则 `ANTHROPIC_MODEL`、haiku、sonnet、opus 都会写成这个自定义模型。
 
 ### 7. 指定 Claude 配置目录
 

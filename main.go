@@ -65,7 +65,7 @@ var providerPresets = map[string]ProviderPreset{
 		Website:   "https://platform.minimaxi.com",
 		APIKeyURL: "https://platform.minimaxi.com/docs/token-plan/claude-code",
 		ExtraEnv: map[string]any{
-			"API_TIMEOUT_MS":                      "3000000",
+			"API_TIMEOUT_MS": "3000000",
 			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
 		},
 	},
@@ -80,7 +80,7 @@ var providerPresets = map[string]ProviderPreset{
 		Website:   "https://platform.minimax.io",
 		APIKeyURL: "https://platform.minimax.io/docs/token-plan/claude-code",
 		ExtraEnv: map[string]any{
-			"API_TIMEOUT_MS":                      "3000000",
+			"API_TIMEOUT_MS": "3000000",
 			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
 		},
 	},
@@ -323,7 +323,7 @@ func cmdSwitch(args []string) error {
 }
 
 func switchProvider(provider string, cfg *AppConfig, apiKey, modelOverride, claudeDir string) error {
-	preset, err := resolveProviderPreset(provider, cfg)
+	preset, err := resolveSwitchPreset(provider, cfg, modelOverride)
 	if err != nil {
 		return err
 	}
@@ -338,7 +338,7 @@ func switchProvider(provider string, cfg *AppConfig, apiKey, modelOverride, clau
 		return err
 	}
 
-	applyPreset(root, preset, apiKey, modelOverride)
+	applyPreset(root, preset, apiKey, "")
 	if err := writeJSONAtomic(settingsPath, root); err != nil {
 		return err
 	}
@@ -346,7 +346,7 @@ func switchProvider(provider string, cfg *AppConfig, apiKey, modelOverride, clau
 	fmt.Printf("switched Claude to %s\n", preset.Name)
 	fmt.Printf("settings: %s\n", settingsPath)
 	fmt.Printf("base_url: %s\n", preset.BaseURL)
-	fmt.Printf("model: %s\n", effectiveModel(preset, modelOverride))
+	fmt.Printf("model: %s\n", preset.Model)
 	return nil
 }
 
@@ -403,10 +403,7 @@ func canonicalProviderName(name string) string {
 func resolveProviderPreset(provider string, cfg *AppConfig) (ProviderPreset, error) {
 	if preset, ok := providerPresets[provider]; ok {
 		if stored, ok := cfg.Providers[provider]; ok && strings.TrimSpace(stored.Model) != "" {
-			preset.Model = strings.TrimSpace(stored.Model)
-			if !containsString(preset.Models, preset.Model) {
-				preset.Models = append([]string{preset.Model}, preset.Models...)
-			}
+			preset = withSelectedModel(preset, stored.Model)
 		}
 		return preset, nil
 	}
@@ -428,6 +425,22 @@ func resolveProviderPreset(provider string, cfg *AppConfig) (ProviderPreset, err
 		Sonnet:  model,
 		Opus:    model,
 	}, nil
+}
+
+func resolveSwitchPreset(provider string, cfg *AppConfig, modelOverride string) (ProviderPreset, error) {
+	if preset, ok := providerPresets[provider]; ok {
+		model := strings.TrimSpace(modelOverride)
+		if model == "" {
+			model = strings.TrimSpace(cfg.Providers[provider].Model)
+		}
+		return withSelectedModel(preset, model), nil
+	}
+
+	preset, err := resolveProviderPreset(provider, cfg)
+	if err != nil {
+		return ProviderPreset{}, err
+	}
+	return withSelectedModel(preset, modelOverride), nil
 }
 
 func upsertProviderConfig(cfg *AppConfig, selection ConfigureSelection, apiKey string) {
@@ -458,11 +471,21 @@ func detectProvider(baseURL, model string) string {
 	}
 }
 
-func effectiveModel(preset ProviderPreset, override string) string {
-	if override != "" {
-		return override
+func withSelectedModel(preset ProviderPreset, model string) ProviderPreset {
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return preset
 	}
-	return preset.Model
+
+	isPresetModel := containsString(preset.Models, model)
+	preset.Model = model
+	if !isPresetModel {
+		preset.Models = append([]string{model}, preset.Models...)
+		preset.Haiku = model
+		preset.Sonnet = model
+		preset.Opus = model
+	}
+	return preset
 }
 
 func promptConfigureSelectionFallback(reader *bufio.Reader, out io.Writer, cfg *AppConfig, currentProvider, currentModel string) (ConfigureSelection, error) {
@@ -1314,17 +1337,13 @@ func applyPreset(root map[string]any, preset ProviderPreset, apiKey, overrideMod
 		delete(env, key)
 	}
 
+	preset = withSelectedModel(preset, overrideModel)
 	env["ANTHROPIC_BASE_URL"] = preset.BaseURL
 	env["ANTHROPIC_API_KEY"] = apiKey
-	env["ANTHROPIC_MODEL"] = effectiveModel(preset, overrideModel)
+	env["ANTHROPIC_MODEL"] = preset.Model
 	env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = preset.Haiku
 	env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = preset.Sonnet
 	env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = preset.Opus
-	if overrideModel != "" {
-		env["ANTHROPIC_DEFAULT_HAIKU_MODEL"] = overrideModel
-		env["ANTHROPIC_DEFAULT_SONNET_MODEL"] = overrideModel
-		env["ANTHROPIC_DEFAULT_OPUS_MODEL"] = overrideModel
-	}
 
 	for key, value := range preset.ExtraEnv {
 		env[key] = value
