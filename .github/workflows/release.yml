@@ -76,7 +76,7 @@ jobs:
       - name: Create and push tag
         id: tag
         run: |
-          git fetch --tags
+          git fetch --tags --force
           CURRENT_TAG=$(git describe --tags --exact-match HEAD 2>/dev/null || echo "")
           if [ -n "$CURRENT_TAG" ]; then
             echo "tag=$CURRENT_TAG" >> $GITHUB_OUTPUT
