@@ -64,9 +64,6 @@ jobs:
         goarch:
           - amd64
           - arm64
-        exclude:
-          - goos: windows
-            goarch: arm64
 
     steps:
       - uses: actions/checkout@v4
@@ -112,7 +109,7 @@ jobs:
     needs:
       - tag
       - build
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch'
     permissions:
       contents: write
     steps:
@@ -138,3 +135,4 @@ jobs:
             artifacts/${{ env.PROJECT_NAME }}-linux-amd64/${{ env.PROJECT_NAME }}-linux-amd64.tar.gz
             artifacts/${{ env.PROJECT_NAME }}-linux-arm64/${{ env.PROJECT_NAME }}-linux-arm64.tar.gz
             artifacts/${{ env.PROJECT_NAME }}-windows-amd64/${{ env.PROJECT_NAME }}-windows-amd64.zip
+            artifacts/${{ env.PROJECT_NAME }}-windows-arm64/${{ env.PROJECT_NAME }}-windows-arm64.zip

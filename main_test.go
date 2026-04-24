@@ -50,6 +50,7 @@ func TestUpgradeAssetName(t *testing.T) {
 		{goos: "linux", goarch: "amd64", want: "claude-switch-linux-amd64.tar.gz"},
 		{goos: "linux", goarch: "arm64", want: "claude-switch-linux-arm64.tar.gz"},
 		{goos: "windows", goarch: "amd64", want: "claude-switch-windows-amd64.zip"},
+		{goos: "windows", goarch: "arm64", want: "claude-switch-windows-arm64.zip"},
 	}
 
 	for _, tc := range cases {
@@ -696,6 +697,41 @@ func TestCmdConfigureResetKeyPromptsForNewValue(t *testing.T) {
 
 	if !strings.Contains(output.String(), "API key:") {
 		t.Fatalf("expected api key prompt, got %q", output.String())
+	}
+}
+
+func TestRunTopLevelResetKeyConfigures(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := AppConfig{
+		Providers: map[string]StoredProvider{
+			"minimax-cn": {APIKey: "sk-existing"},
+		},
+	}
+	configPath := filepath.Join(home, ".claude-switch", "config.json")
+	if err := writeJSONAtomic(configPath, cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	input := strings.NewReader("minimax-cn\n\nsk-top-level\n")
+	output := &bytes.Buffer{}
+
+	if err := runWithIO([]string{"--reset-key"}, input, output); err != nil {
+		t.Fatalf("runWithIO returned error: %v", err)
+	}
+
+	configBytes, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+
+	var updated AppConfig
+	if err := json.Unmarshal(configBytes, &updated); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+	if got := updated.Providers["minimax-cn"].APIKey; got != "sk-top-level" {
+		t.Fatalf("stored api key = %q, want %q", got, "sk-top-level")
 	}
 }
 

@@ -183,6 +183,9 @@ func runWithIO(args []string, in io.Reader, out io.Writer) error {
 	if len(args) == 0 {
 		return cmdConfigure(nil, in, out)
 	}
+	if strings.HasPrefix(args[0], "-") {
+		return cmdConfigure(args, in, out)
+	}
 
 	switch args[0] {
 	case "list":

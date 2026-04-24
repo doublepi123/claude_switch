@@ -63,31 +63,37 @@ MiniMax 中国区参考官方 CN 文档：
 ### macOS Intel
 
 ```bash
-curl -fsSL https://github.com/doublepi123/claude_switch/releases/latest/download/claude-switch-darwin-amd64.tar.gz | tar xz && mv cs ~/.local/bin/cs && chmod +x ~/.local/bin/cs
+mkdir -p ~/.local/bin && curl -fsSL https://github.com/doublepi123/claude_switch/releases/latest/download/claude-switch-darwin-amd64.tar.gz | tar xz && mv cs ~/.local/bin/cs && chmod +x ~/.local/bin/cs
 ```
 
 ### macOS Apple Silicon
 
 ```bash
-curl -fsSL https://github.com/doublepi123/claude_switch/releases/latest/download/claude-switch-darwin-arm64.tar.gz | tar xz && mv cs ~/.local/bin/cs && chmod +x ~/.local/bin/cs
+mkdir -p ~/.local/bin && curl -fsSL https://github.com/doublepi123/claude_switch/releases/latest/download/claude-switch-darwin-arm64.tar.gz | tar xz && mv cs ~/.local/bin/cs && chmod +x ~/.local/bin/cs
 ```
 
 ### Linux x86_64
 
 ```bash
-curl -fsSL https://github.com/doublepi123/claude_switch/releases/latest/download/claude-switch-linux-amd64.tar.gz | tar xz && mv cs ~/.local/bin/cs && chmod +x ~/.local/bin/cs
+mkdir -p ~/.local/bin && curl -fsSL https://github.com/doublepi123/claude_switch/releases/latest/download/claude-switch-linux-amd64.tar.gz | tar xz && mv cs ~/.local/bin/cs && chmod +x ~/.local/bin/cs
 ```
 
 ### Linux ARM64
 
 ```bash
-curl -fsSL https://github.com/doublepi123/claude_switch/releases/latest/download/claude-switch-linux-arm64.tar.gz | tar xz && mv cs ~/.local/bin/cs && chmod +x ~/.local/bin/cs
+mkdir -p ~/.local/bin && curl -fsSL https://github.com/doublepi123/claude_switch/releases/latest/download/claude-switch-linux-arm64.tar.gz | tar xz && mv cs ~/.local/bin/cs && chmod +x ~/.local/bin/cs
 ```
 
 ### Windows x86_64 (PowerShell)
 
 ```powershell
 Invoke-WebRequest -Uri "https://github.com/doublepi123/claude_switch/releases/latest/download/claude-switch-windows-amd64.zip" -OutFile "$env:TEMP\claude-switch.zip"; Expand-Archive -Path "$env:TEMP\claude-switch.zip" -DestinationPath "$env:TEMP\claude-switch" -Force; New-Item -Path "$env:LOCALAPPDATA\Programs\claude-switch\bin" -ItemType Directory -Force | Out-Null; Move-Item -Path "$env:TEMP\claude-switch\cs.exe" -Destination "$env:LOCALAPPDATA\Programs\claude-switch\bin\" -Force; Remove-Item -Path "$env:TEMP\claude-switch.zip","$env:TEMP\claude-switch" -Force -ErrorAction SilentlyContinue
+```
+
+### Windows ARM64 (PowerShell)
+
+```powershell
+Invoke-WebRequest -Uri "https://github.com/doublepi123/claude_switch/releases/latest/download/claude-switch-windows-arm64.zip" -OutFile "$env:TEMP\claude-switch.zip"; Expand-Archive -Path "$env:TEMP\claude-switch.zip" -DestinationPath "$env:TEMP\claude-switch" -Force; New-Item -Path "$env:LOCALAPPDATA\Programs\claude-switch\bin" -ItemType Directory -Force | Out-Null; Move-Item -Path "$env:TEMP\claude-switch\cs.exe" -Destination "$env:LOCALAPPDATA\Programs\claude-switch\bin\" -Force; Remove-Item -Path "$env:TEMP\claude-switch.zip","$env:TEMP\claude-switch" -Force -ErrorAction SilentlyContinue
 ```
 
 安装完成后验证：
@@ -134,7 +140,7 @@ INSTALL_DIR=/usr/local/bin ./scripts/install.sh
 
 ### 从源码构建
 
-需要 Go 1.20+。
+需要 Go 1.22+。
 
 ```bash
 go build -o cs .
@@ -384,6 +390,7 @@ cs switch minimax-cn --claude-dir /path/to/.claude
 
 - `ANTHROPIC_BASE_URL`
 - `ANTHROPIC_API_KEY`
+- `ANTHROPIC_AUTH_TOKEN`
 - `ANTHROPIC_MODEL`
 - `ANTHROPIC_DEFAULT_HAIKU_MODEL`
 - `ANTHROPIC_DEFAULT_SONNET_MODEL`
