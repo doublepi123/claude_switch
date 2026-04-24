@@ -127,22 +127,29 @@ var managedEnvKeys = []string{
 }
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
+	resetKey := false
+	args := os.Args[1:]
+	for i, a := range args {
+		if a == "--reset-key" {
+			resetKey = true
+			args = append(args[:i], args[i+1:]...)
+			break
+		}
+	}
+	if err := run(args, resetKey); err != nil {
 		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
 }
 
-func run(args []string) error {
+func run(args []string, resetKey bool) error {
 	if len(args) == 0 {
-		return cmdConfigure(nil, os.Stdin, os.Stdout)
+		return cmdConfigure(nil, os.Stdin, os.Stdout, resetKey)
 	}
 
 	switch args[0] {
 	case "list":
 		return cmdList()
-	case "configure":
-		return cmdConfigure(args[1:], os.Stdin, os.Stdout)
 	case "current":
 		return cmdCurrent(args[1:])
 	case "set-key":
@@ -166,17 +173,14 @@ func cmdList() error {
 	return nil
 }
 
-func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
-	fs := flag.NewFlagSet("configure", flag.ContinueOnError)
+func cmdConfigure(args []string, in io.Reader, out io.Writer, resetKeyFlag bool) error {
+	fs := flag.NewFlagSet("claude-switch", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	claudeDir := fs.String("claude-dir", "", "override Claude config dir")
-	resetKey := fs.Bool("reset-key", false, "force re-enter api key for the selected provider")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if fs.NArg() != 0 {
-		return errors.New("usage: claude-switch configure [--claude-dir DIR] [--reset-key]")
-	}
+	resetKey := resetKeyFlag
 
 	cfg, configPath, err := loadAppConfig()
 	if err != nil {
@@ -208,7 +212,7 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 			return err
 		}
 		fmt.Fprintf(out, "saved api key for %s in %s\n", provider, configPath)
-	} else if apiKey == "" || *resetKey || selection.ResetKey {
+	} else if apiKey == "" || resetKey || selection.ResetKey {
 		apiKey, err = promptAPIKey(reader, out, provider)
 		if err != nil {
 			return err
@@ -347,11 +351,11 @@ func printUsage() {
 	fmt.Println(`claude-switch
 
 Usage:
-  claude-switch list
-  claude-switch configure [--claude-dir DIR] [--reset-key]
-  claude-switch current [--claude-dir DIR]
-  claude-switch set-key <provider> <api-key>
-  claude-switch switch <provider> [--api-key sk-xxx] [--model model-id] [--claude-dir DIR]
+  cs list
+  cs [--reset-key]                     # interactive TUI
+  cs current [--claude-dir DIR]
+  cs set-key <provider> <api-key>
+  cs switch <provider> [--api-key sk-xxx] [--model model-id] [--claude-dir DIR]
 
 	Providers:
 	  minimax-cn

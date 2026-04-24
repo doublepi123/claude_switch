@@ -144,7 +144,7 @@ go run .
 ### 1. 直接执行交互式配置
 
 ```bash
-cs configure
+cs
 ```
 
 命令会以 TUI 方式引导你：
@@ -157,7 +157,7 @@ cs configure
 - 自动保存配置
 - 立即切换当前 Claude Code 到所选供应商
 
-如果该供应商之前已经保存过 API Key，`cs configure` 会直接复用，不会要求你重复输入。
+如果该供应商之前已经保存过 API Key，`cs` 会直接复用，不会要求你重复输入。
 
 ### 2. 确认当前生效配置
 
@@ -179,14 +179,10 @@ cs list
 
 ### 2. 交互式配置
 
+直接运行 `cs` 即可进入 TUI：
+
 ```bash
 cs
-```
-
-或：
-
-```bash
-cs configure
 ```
 
 TUI 操作方式：
@@ -206,12 +202,12 @@ TUI 操作方式：
   - `←` / `q`：返回 provider 详情页
 - `q`：退出
 
-如果你已经保存过某个供应商的 API Key，重新执行 `cs configure` 时会直接复用。
+如果你已经保存过某个供应商的 API Key，重新执行 `cs` 时会直接复用。
 
-如果你想强制重填该供应商的 API Key：
+如果想强制重新输入某个供应商的 API Key：
 
 ```bash
-cs configure --reset-key
+cs --reset-key
 ```
 
 ### 3. 查看当前配置
@@ -354,7 +350,7 @@ cs current
 首次配置推荐直接使用交互模式：
 
 ```bash
-cs configure
+cs
 cs current
 ```
 
