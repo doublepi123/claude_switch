@@ -51,31 +51,31 @@ MiniMax 中国区参考官方 CN 文档：
 ### macOS Intel
 
 ```bash
-curl -fsSL https://github.com/doublepi123/claude_switch/releases/latest/download/claude-switch-darwin-amd64.tar.gz | tar xz && mv claude-switch-darwin-amd64/cs ~/.local/bin/cs && chmod +x ~/.local/bin/cs
+curl -fsSL https://github.com/doublepi123/claude_switch/releases/latest/download/claude-switch-darwin-amd64.tar.gz | tar xz && mv cs ~/.local/bin/cs && chmod +x ~/.local/bin/cs
 ```
 
 ### macOS Apple Silicon
 
 ```bash
-curl -fsSL https://github.com/doublepi123/claude_switch/releases/latest/download/claude-switch-darwin-arm64.tar.gz | tar xz && mv claude-switch-darwin-arm64/cs ~/.local/bin/cs && chmod +x ~/.local/bin/cs
+curl -fsSL https://github.com/doublepi123/claude_switch/releases/latest/download/claude-switch-darwin-arm64.tar.gz | tar xz && mv cs ~/.local/bin/cs && chmod +x ~/.local/bin/cs
 ```
 
 ### Linux x86_64
 
 ```bash
-curl -fsSL https://github.com/doublepi123/claude_switch/releases/latest/download/claude-switch-linux-amd64.tar.gz | tar xz && mv claude-switch-linux-amd64/cs ~/.local/bin/cs && chmod +x ~/.local/bin/cs
+curl -fsSL https://github.com/doublepi123/claude_switch/releases/latest/download/claude-switch-linux-amd64.tar.gz | tar xz && mv cs ~/.local/bin/cs && chmod +x ~/.local/bin/cs
 ```
 
 ### Linux ARM64
 
 ```bash
-curl -fsSL https://github.com/doublepi123/claude_switch/releases/latest/download/claude-switch-linux-arm64.tar.gz | tar xz && mv claude-switch-linux-arm64/cs ~/.local/bin/cs && chmod +x ~/.local/bin/cs
+curl -fsSL https://github.com/doublepi123/claude_switch/releases/latest/download/claude-switch-linux-arm64.tar.gz | tar xz && mv cs ~/.local/bin/cs && chmod +x ~/.local/bin/cs
 ```
 
 ### Windows x86_64 (PowerShell)
 
 ```powershell
-Invoke-WebRequest -Uri "https://github.com/doublepi123/claude_switch/releases/latest/download/claude-switch-windows-amd64.zip" -OutFile "$env:TEMP\claude-switch.zip"; Expand-Archive -Path "$env:TEMP\claude-switch.zip" -DestinationPath "$env:TEMP\claude-switch"; Move-Item -Path "$env:TEMP\claude-switch\cs.exe" -Destination "$env:LOCALAPPDATA\Programs\claude-switch\bin\" -Force; New-Item -Path "$env:LOCALAPPDATA\Programs\claude-switch\bin" -ItemType Directory -Force | Out-Null; Move-Item -Path "$env:TEMP\claude-switch\cs.exe" -Destination "$env:LOCALAPPDATA\Programs\claude-switch\bin\" -Force; Remove-Item -Path "$env:TEMP\claude-switch.zip" -Force -ErrorAction SilentlyContinue; Remove-Item -Path "$env:TEMP\claude-switch" -Recurse -Force -ErrorAction SilentlyContinue
+Invoke-WebRequest -Uri "https://github.com/doublepi123/claude_switch/releases/latest/download/claude-switch-windows-amd64.zip" -OutFile "$env:TEMP\claude-switch.zip"; Expand-Archive -Path "$env:TEMP\claude-switch.zip" -DestinationPath "$env:TEMP\claude-switch" -Force; New-Item -Path "$env:LOCALAPPDATA\Programs\claude-switch\bin" -ItemType Directory -Force | Out-Null; Move-Item -Path "$env:TEMP\claude-switch\cs.exe" -Destination "$env:LOCALAPPDATA\Programs\claude-switch\bin\" -Force; Remove-Item -Path "$env:TEMP\claude-switch.zip","$env:TEMP\claude-switch" -Force -ErrorAction SilentlyContinue
 ```
 
 安装完成后验证：

@@ -46,11 +46,13 @@ jobs:
           echo "OUTPUT_NAME=$OUTPUT_NAME" >> $GITHUB_ENV
           go build -ldflags="-s -w" -o "$OUTPUT_NAME" .
 
-          # Package: tar.gz for unix, zip for windows
+          # Rename binary to "cs" before packaging so tarball extracts directly to "cs"
           if [ "$GOOS" = "windows" ]; then
-            zip "${OUTPUT_NAME}.zip" "$OUTPUT_NAME"
+            mv "$OUTPUT_NAME" "cs.exe"
+            zip "${{ env.PROJECT_NAME }}-${GOOS}-${GOARCH}.zip" "cs.exe"
           else
-            tar czf "${OUTPUT_NAME}.tar.gz" "$OUTPUT_NAME"
+            mv "$OUTPUT_NAME" cs
+            tar czf "${{ env.PROJECT_NAME }}-${GOOS}-${GOARCH}.tar.gz" cs
           fi
 
       - name: Upload artifact
