@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -260,7 +261,7 @@ func TestCmdConfigureResetKeyPromptsForNewValue(t *testing.T) {
 	}
 }
 
-func TestRenderConfigureScreenShowsSavedState(t *testing.T) {
+func TestRenderProviderListScreenShowsSavedState(t *testing.T) {
 	cfg := &AppConfig{
 		Providers: map[string]StoredProvider{
 			"openrouter": {APIKey: "sk-existing"},
@@ -268,20 +269,68 @@ func TestRenderConfigureScreenShowsSavedState(t *testing.T) {
 	}
 	output := &bytes.Buffer{}
 
-	renderConfigureScreen(output, sortedProviderNames(), cfg, "minimax-cn", "MiniMax-M2.7", 0, 0, "")
+	renderProviderListScreen(output, sortedProviderNames(), cfg, "minimax-cn", 0, "")
 
-	text := output.String()
-	if !strings.Contains(text, "minimax-cn [current]") {
+	text := stripANSI(output.String())
+	if !strings.Contains(text, "minimax-cn") || !strings.Contains(text, "current") {
 		t.Fatalf("expected current provider marker, got %q", text)
 	}
-	if !strings.Contains(text, "openrouter [saved-key]") {
+	if !strings.Contains(text, "openrouter") || !strings.Contains(text, "saved") {
 		t.Fatalf("expected saved-key marker, got %q", text)
 	}
-	if !strings.Contains(text, "Saved key: not saved") {
+	if strings.Contains(text, "Models") {
+		t.Fatalf("did not expect models page content on list screen, got %q", text)
+	}
+}
+
+func TestRenderProviderInfoScreenShowsSummaryOnly(t *testing.T) {
+	cfg := &AppConfig{
+		Providers: map[string]StoredProvider{
+			"openrouter": {APIKey: "sk-existing"},
+		},
+	}
+	output := &bytes.Buffer{}
+
+	renderProviderInfoScreen(output, sortedProviderNames(), cfg, "minimax-cn", "MiniMax-M2.7", 0, "", false)
+
+	text := stripANSI(output.String())
+	if !strings.Contains(text, "Saved Key not saved") {
 		t.Fatalf("expected saved key summary, got %q", text)
 	}
+	if strings.Contains(text, "> MiniMax-M2.7") {
+		t.Fatalf("did not expect model list on provider info screen, got %q", text)
+	}
+}
+
+func TestRenderProviderModelsScreenShowsModelList(t *testing.T) {
+	cfg := &AppConfig{
+		Providers: map[string]StoredProvider{
+			"openrouter": {APIKey: "sk-existing"},
+		},
+	}
+	output := &bytes.Buffer{}
+
+	renderProviderModelsScreen(output, sortedProviderNames(), cfg, "minimax-cn", "MiniMax-M2.7", 0, 0, "", false)
+
+	text := stripANSI(output.String())
 	if !strings.Contains(text, "> MiniMax-M2.7") {
 		t.Fatalf("expected selected model marker, got %q", text)
+	}
+}
+
+func TestRenderProviderInfoScreenShowsKeyResetState(t *testing.T) {
+	cfg := &AppConfig{
+		Providers: map[string]StoredProvider{
+			"openrouter": {APIKey: "sk-existing"},
+		},
+	}
+	output := &bytes.Buffer{}
+
+	renderProviderInfoScreen(output, sortedProviderNames(), cfg, "openrouter", "anthropic/claude-sonnet-4.6", 3, "", true)
+
+	text := stripANSI(output.String())
+	if !strings.Contains(text, "Key Action re-enter on apply") {
+		t.Fatalf("expected key reset state, got %q", text)
 	}
 }
 
@@ -292,4 +341,29 @@ func TestMaskAPIKey(t *testing.T) {
 	if got := maskAPIKey("sk-1234567890"); got != "sk-1*****7890" {
 		t.Fatalf("maskAPIKey = %q", got)
 	}
+}
+
+func TestHasConfigurableKey(t *testing.T) {
+	cases := []struct {
+		saved    string
+		typed    string
+		reset    bool
+		expected bool
+	}{
+		{saved: "sk-old", typed: "", reset: false, expected: true},
+		{saved: "", typed: "sk-new", reset: false, expected: true},
+		{saved: "sk-old", typed: "", reset: true, expected: false},
+		{saved: "", typed: "", reset: false, expected: false},
+	}
+
+	for _, tc := range cases {
+		if got := hasConfigurableKey(tc.saved, tc.typed, tc.reset); got != tc.expected {
+			t.Fatalf("hasConfigurableKey(%q, %q, %v) = %v, want %v", tc.saved, tc.typed, tc.reset, got, tc.expected)
+		}
+	}
+}
+
+func stripANSI(text string) string {
+	re := regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	return re.ReplaceAllString(text, "")
 }

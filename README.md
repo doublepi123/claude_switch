@@ -128,8 +128,9 @@ cs configure
 命令会以 TUI 方式引导你：
 
 - 用方向键选择供应商
+- 首次为该供应商保存 API Key
+- 再进入模型选择页
 - 在 TUI 内切换模型
-- 首次为该供应商输入 API Key
 - 显示当前已保存 API Key 的掩码摘要
 - 自动保存配置
 - 立即切换当前 Claude Code 到所选供应商
@@ -168,9 +169,19 @@ cs configure
 
 TUI 操作方式：
 
-- `↑` / `↓`：切换 provider
-- `←` / `→`：切换模型
-- `Enter`：确认并应用
+- 一级 `Providers`
+  - `↑` / `↓`：切换 provider
+  - `Enter` / `→`：进入 provider 详情页
+- 二级 `Provider details`
+  - `Enter` / `→`：进入下一步
+  - 如果当前 provider 还没有已保存 key，会先要求输入并保存 API Key，再进入模型页
+  - `k`：立即修改 API Key
+  - `←` / `q`：返回 provider 列表
+- 三级 `Models`
+  - `↑` / `↓`：切换模型
+  - `Enter`：确认并应用
+  - `k`：立即修改 API Key
+  - `←` / `q`：返回 provider 详情页
 - `q`：退出
 
 如果你已经保存过某个供应商的 API Key，重新执行 `cs configure` 时会直接复用。
