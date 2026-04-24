@@ -85,6 +85,7 @@ jobs:
           NEW_TAG="v${major}.${minor}.${new_patch}"
           echo "tag=$NEW_TAG" >> $GITHUB_OUTPUT
           echo "Created tag: $NEW_TAG"
+          git tag -d "$NEW_TAG" 2>/dev/null || true
           git tag "$NEW_TAG"
           git push origin "$NEW_TAG"
 
