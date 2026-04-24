@@ -76,6 +76,7 @@ jobs:
       - name: Create and push tag
         id: tag
         run: |
+          git fetch --tags
           LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
           major=$(echo "$LAST_TAG" | cut -d. -f1 | tr -d v)
           minor=$(echo "$LAST_TAG" | cut -d. -f2)
