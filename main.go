@@ -8,13 +8,15 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/gdamore/tcell/v2"
+	"github.com/rivo/tview"
 )
 
 type ProviderPreset struct {
@@ -49,14 +51,6 @@ type ConfigureSelection struct {
 	Name     string
 	BaseURL  string
 }
-
-type tuiPage int
-
-const (
-	tuiPageProviders tuiPage = iota
-	tuiPageProviderDetail
-	tuiPageModels
-)
 
 var providerPresets = map[string]ProviderPreset{
 	"minimax-cn": {
@@ -114,8 +108,8 @@ var providerPresets = map[string]ProviderPreset{
 }
 
 var providerAliases = map[string]string{
-	"minimax":             "minimax-cn",
-	"minimax-cn-token":    "minimax-cn",
+	"minimax":              "minimax-cn",
+	"minimax-cn-token":     "minimax-cn",
 	"minimax-global-token": "minimax-global",
 }
 
@@ -469,7 +463,22 @@ func promptConfigureSelectionFallback(reader *bufio.Reader, out io.Writer, cfg *
 	names := sortedProviderNames(cfg, true)
 
 	for {
-		renderProviderListScreen(out, names, cfg, currentProvider, 0, "")
+		fmt.Fprintln(out, "Providers:")
+		for i, name := range names {
+			if name == customProviderOption {
+				fmt.Fprintf(out, "  %d) custom...\n", i+1)
+				continue
+			}
+			preset, err := resolveProviderPreset(name, cfg)
+			if err != nil {
+				continue
+			}
+			label := providerTitle(name, cfg)
+			if name == currentProvider {
+				label += " [current]"
+			}
+			fmt.Fprintf(out, "  %d) %s - %s\n", i+1, label, preset.BaseURL)
+		}
 		fmt.Fprint(out, "Provider: ")
 		text, err := readLine(reader)
 		if err != nil {
@@ -482,7 +491,7 @@ func promptConfigureSelectionFallback(reader *bufio.Reader, out io.Writer, cfg *
 			}
 			return ConfigureSelection{
 				Provider: provider,
-				Model:    defaultSelectionModel(provider, currentProvider, currentModel),
+				Model:    defaultSelectionModel(cfg, provider, currentProvider, currentModel),
 			}, nil
 		}
 		fmt.Fprintf(out, "\nInvalid provider: %s\n", strings.TrimSpace(text))
@@ -490,172 +499,426 @@ func promptConfigureSelectionFallback(reader *bufio.Reader, out io.Writer, cfg *
 }
 
 func runArrowTUI(in *os.File, out io.Writer, cfg *AppConfig, currentProvider, currentModel string) (ConfigureSelection, error) {
-	restore, err := enterRawMode(in)
-	if err != nil {
-		return promptConfigureSelectionFallback(bufio.NewReader(in), out, cfg, currentProvider, currentModel)
-	}
-	defer restore()
-
 	names := sortedProviderNames(cfg, true)
 	if len(names) == 0 {
 		return ConfigureSelection{}, errors.New("no providers configured")
 	}
 
-	reader := bufio.NewReader(in)
-	selectedProvider := 0
-	for i, name := range names {
+	_ = in
+	_ = out
+
+	app := tview.NewApplication()
+	pages := tview.NewPages()
+
+	selectedProvider := names[0]
+	for _, name := range names {
 		if name == currentProvider {
-			selectedProvider = i
+			selectedProvider = name
 			break
 		}
 	}
-	selectedModel := modelIndex(names[selectedProvider], currentProvider, currentModel)
-	status := ""
-	page := tuiPageProviders
-	resetKey := false
-	typedAPIKey := ""
 
-	for {
-		if page == tuiPageProviders {
-			renderProviderListScreen(out, names, cfg, currentProvider, selectedProvider, status)
-		} else if page == tuiPageProviderDetail {
-			renderProviderInfoScreen(out, names, cfg, currentProvider, currentModel, selectedProvider, status, resetKey)
-		} else {
-			renderProviderModelsScreen(out, names, cfg, currentProvider, currentModel, selectedProvider, selectedModel, status, resetKey)
-		}
-		key, err := readKey(reader)
-		if err != nil {
-			return ConfigureSelection{}, err
-		}
+	typedAPIKeys := map[string]string{}
+	resetKeys := map[string]bool{}
+	customModels := map[string]string{}
 
-		switch key {
-		case "up":
-			if page == tuiPageProviders {
-				if selectedProvider > 0 {
-					selectedProvider--
-					selectedModel = modelIndex(names[selectedProvider], currentProvider, currentModel)
-				}
-			} else if page == tuiPageModels && selectedModel > 0 {
-				selectedModel--
-			}
-			status = ""
-		case "down":
-			if page == tuiPageProviders {
-				if selectedProvider < len(names)-1 {
-					selectedProvider++
-					selectedModel = modelIndex(names[selectedProvider], currentProvider, currentModel)
-				}
-			} else if page == tuiPageModels {
-				models := providerModels(names[selectedProvider])
-				if selectedModel < len(models)-1 {
-					selectedModel++
-				}
-			}
-			status = ""
-		case "left":
-			if page == tuiPageModels {
-				page = tuiPageProviderDetail
-			} else if page == tuiPageProviderDetail {
-				page = tuiPageProviders
-			}
-			status = ""
-		case "right":
-			if page == tuiPageProviders {
-				if names[selectedProvider] == customProviderOption {
-					return promptCustomProviderWizard(reader, out, cfg)
-				}
-				page = tuiPageProviderDetail
-			} else if page == tuiPageProviderDetail {
-				if !hasConfigurableKey(strings.TrimSpace(cfg.Providers[names[selectedProvider]].APIKey), typedAPIKey, resetKey) {
-					keyValue, promptErr := promptAPIKeyMasked(reader, out, names[selectedProvider])
-					if promptErr != nil {
-						status = "API key input cancelled."
-						continue
-					}
-					typedAPIKey = keyValue
-					resetKey = true
-					status = "API key captured. Now choose a model."
-				}
-				page = tuiPageModels
-			}
-			status = ""
-		case "enter":
-			if page == tuiPageProviders {
-				if names[selectedProvider] == customProviderOption {
-					return promptCustomProviderWizard(reader, out, cfg)
-				}
-				page = tuiPageProviderDetail
-				status = ""
-				continue
-			}
-			if page == tuiPageProviderDetail {
-				if !hasConfigurableKey(strings.TrimSpace(cfg.Providers[names[selectedProvider]].APIKey), typedAPIKey, resetKey) {
-					keyValue, promptErr := promptAPIKeyMasked(reader, out, names[selectedProvider])
-					if promptErr != nil {
-						status = "API key input cancelled."
-						continue
-					}
-					typedAPIKey = keyValue
-					resetKey = true
-					status = "API key captured. Now choose a model."
-				}
-				page = tuiPageModels
-				status = ""
-				continue
-			}
-			models := providerModels(names[selectedProvider])
-			return ConfigureSelection{
-				Provider: names[selectedProvider],
-				Model:    models[selectedModel],
-				ResetKey: resetKey,
-				APIKey:   typedAPIKey,
-			}, nil
-		case "quit":
-			if page == tuiPageModels {
-				page = tuiPageProviderDetail
-				status = ""
-				continue
-			}
-			if page == tuiPageProviderDetail {
-				page = tuiPageProviders
-				status = ""
-				continue
-			}
-			return ConfigureSelection{}, errors.New("cancelled")
-		default:
-			if page == tuiPageProviders {
-				status = "Use ↑ ↓ to choose provider, Enter or → to open details, q to quit."
-			} else if page == tuiPageProviderDetail {
-				status = "Enter or → to choose model, k to edit key, ← or q to go back."
-			} else {
-				status = "Use ↑ ↓ to choose model, Enter to apply, k to edit key, ← or q to go back."
-			}
-		case "key":
-			if page == tuiPageProviderDetail || page == tuiPageModels {
-				keyValue, promptErr := promptAPIKeyMasked(reader, out, names[selectedProvider])
-				if promptErr != nil {
-					status = "API key input cancelled."
-					continue
-				}
-				typedAPIKey = keyValue
-				resetKey = true
-				status = "New API key captured. It will be saved on apply."
-			}
-		case "custom_model":
-			if page == tuiPageModels {
-				modelValue, promptErr := promptTextInput(reader, out, "Custom Model", "Model", "Enter any model name. It will be saved as this provider's default model.", false)
-				if promptErr != nil {
-					status = "Custom model input cancelled."
-					continue
-				}
-				stored := cfg.Providers[names[selectedProvider]]
-				stored.Model = modelValue
-				cfg.Providers[names[selectedProvider]] = stored
-				selectedModel = 0
-				status = "Custom model captured."
+	var (
+		result    ConfigureSelection
+		resultErr error = errors.New("cancelled")
+	)
+
+	buildModels := func(provider string) []string {
+		models := providerModels(cfg, provider)
+		customModel := strings.TrimSpace(customModels[provider])
+		if customModel == "" {
+			return models
+		}
+		filtered := []string{customModel}
+		for _, model := range models {
+			if model != customModel {
+				filtered = append(filtered, model)
 			}
 		}
+		return filtered
 	}
+
+	finishSelection := func(provider, model string) {
+		result = ConfigureSelection{
+			Provider: provider,
+			Model:    model,
+			ResetKey: resetKeys[provider],
+			APIKey:   strings.TrimSpace(typedAPIKeys[provider]),
+		}
+		resultErr = nil
+		app.Stop()
+	}
+
+	var showProviders func()
+	var showDetail func(string, string)
+	var showModels func(string, string)
+	var showKeyForm func(string, string, func())
+	var showCustomModelForm func(string)
+	var showCustomProviderForm func()
+
+	providerList := tview.NewList()
+	providerList.ShowSecondaryText(true)
+	providerList.SetBorder(true)
+	providerList.SetTitle(" Providers ")
+
+	providerHelp := tview.NewTextView()
+	providerHelp.SetText("Enter/→ details   q/esc quit")
+
+	providerPage := tview.NewFlex()
+	providerPage.SetDirection(tview.FlexRow)
+	providerPage.AddItem(providerList, 0, 1, true)
+	providerPage.AddItem(providerHelp, 1, 0, false)
+	pages.AddPage("providers", providerPage, true, true)
+
+	rebuildProviderList := func() {
+		providerList.Clear()
+		selectedIndex := 0
+		for i, name := range names {
+			if name == selectedProvider {
+				selectedIndex = i
+			}
+			if name == customProviderOption {
+				providerList.AddItem("custom...", "Add a custom Anthropic-compatible provider", 0, nil)
+				continue
+			}
+			preset, err := resolveProviderPreset(name, cfg)
+			if err != nil {
+				continue
+			}
+			suffix := []string{}
+			if name == currentProvider {
+				suffix = append(suffix, "current")
+			}
+			if strings.TrimSpace(cfg.Providers[name].APIKey) != "" {
+				suffix = append(suffix, "saved")
+			}
+			title := providerTitle(name, cfg)
+			if len(suffix) > 0 {
+				title += " [" + strings.Join(suffix, ", ") + "]"
+			}
+			providerList.AddItem(title, preset.BaseURL, 0, nil)
+		}
+		providerList.SetCurrentItem(selectedIndex)
+	}
+
+	providerList.SetChangedFunc(func(index int, mainText, secondaryText string, shortcut rune) {
+		if index >= 0 && index < len(names) {
+			selectedProvider = names[index]
+		}
+	})
+	providerList.SetSelectedFunc(func(index int, mainText, secondaryText string, shortcut rune) {
+		if index < 0 || index >= len(names) {
+			return
+		}
+		selectedProvider = names[index]
+		if selectedProvider == customProviderOption {
+			showCustomProviderForm()
+			return
+		}
+		showDetail(selectedProvider, "providers")
+	})
+	providerList.SetDoneFunc(func() {
+		app.Stop()
+	})
+	providerList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		switch {
+		case event.Key() == tcell.KeyRight:
+			index := providerList.GetCurrentItem()
+			if index >= 0 && index < len(names) {
+				selectedProvider = names[index]
+				if selectedProvider == customProviderOption {
+					showCustomProviderForm()
+				} else {
+					showDetail(selectedProvider, "providers")
+				}
+			}
+			return nil
+		case event.Key() == tcell.KeyEscape:
+			app.Stop()
+			return nil
+		case event.Rune() == 'q' || event.Rune() == 'Q':
+			app.Stop()
+			return nil
+		}
+		return event
+	})
+
+	detailText := tview.NewTextView()
+	detailText.SetDynamicColors(true)
+	detailText.SetWrap(true)
+	detailText.SetBorder(true)
+	detailText.SetTitle(" Provider Details ")
+
+	showProviders = func() {
+		rebuildProviderList()
+		pages.SwitchToPage("providers")
+		app.SetFocus(providerList)
+	}
+
+	showDetail = func(provider, backPage string) {
+		selectedProvider = provider
+		preset, err := resolveProviderPreset(provider, cfg)
+		if err != nil {
+			resultErr = err
+			app.Stop()
+			return
+		}
+		hasSavedKey := strings.TrimSpace(cfg.Providers[provider].APIKey) != ""
+		var b strings.Builder
+		fmt.Fprintf(&b, "[::b]Provider[::-]  %s\n", providerTitle(provider, cfg))
+		fmt.Fprintf(&b, "[::b]Preset[::-]    %s\n", preset.Name)
+		fmt.Fprintf(&b, "[::b]Base URL[::-]  %s\n", preset.BaseURL)
+		fmt.Fprintf(&b, "[::b]Saved Key[::-] %s\n", maskAPIKey(cfg.Providers[provider].APIKey))
+		fmt.Fprintf(&b, "[::b]Active[::-]    %s / %s\n", currentProviderLabel(currentProvider), currentModelLabel(currentModel))
+		if resetKeys[provider] {
+			fmt.Fprintf(&b, "[yellow]Pending key update on apply[-]\n")
+		} else if !hasSavedKey {
+			fmt.Fprintf(&b, "[yellow]No saved key yet[-]\n")
+		}
+		detailText.SetText(b.String())
+
+		detailForm := tview.NewForm()
+		detailForm.AddButton("Choose Model", func() {
+			showModels(provider, "detail")
+		})
+		detailForm.AddButton("Edit API Key", func() {
+			showKeyForm(provider, backPage, func() {
+				showDetail(provider, backPage)
+			})
+		})
+		detailForm.AddButton("Back", showProviders)
+		detailForm.SetBorder(true)
+		detailForm.SetTitle(" Actions ")
+		detailForm.SetButtonsAlign(tview.AlignLeft)
+		detailForm.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+			switch {
+			case event.Key() == tcell.KeyLeft || event.Key() == tcell.KeyEscape:
+				showProviders()
+				return nil
+			case event.Rune() == 'q' || event.Rune() == 'Q':
+				showProviders()
+				return nil
+			case event.Rune() == 'k' || event.Rune() == 'K':
+				showKeyForm(provider, backPage, func() {
+					showDetail(provider, backPage)
+				})
+				return nil
+			}
+			return event
+		})
+
+		page := tview.NewFlex()
+		page.SetDirection(tview.FlexRow)
+		page.AddItem(detailText, 0, 1, false)
+		page.AddItem(detailForm, 8, 0, true)
+		pages.AddAndSwitchToPage("detail", page, true)
+		app.SetFocus(detailForm)
+	}
+
+	showKeyForm = func(provider, backPage string, onSave func()) {
+		currentValue := strings.TrimSpace(typedAPIKeys[provider])
+		keyValue := currentValue
+		form := tview.NewForm()
+		form.AddPasswordField("API Key", currentValue, 0, '*', func(text string) {
+			keyValue = text
+		})
+		form.AddButton("Save", func() {
+			keyValue = strings.TrimSpace(keyValue)
+			if keyValue == "" {
+				return
+			}
+			typedAPIKeys[provider] = keyValue
+			resetKeys[provider] = true
+			onSave()
+		})
+		form.AddButton("Cancel", onSave)
+		form.SetBorder(true)
+		form.SetTitle(" Edit API Key ")
+		form.SetButtonsAlign(tview.AlignLeft)
+		form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+			if event.Key() == tcell.KeyEscape {
+				onSave()
+				return nil
+			}
+			return event
+		})
+		help := tview.NewTextView()
+		help.SetText(fmt.Sprintf("Provider: %s", providerTitle(provider, cfg)))
+		page := tview.NewFlex()
+		page.SetDirection(tview.FlexRow)
+		page.AddItem(help, 1, 0, false)
+		page.AddItem(form, 0, 1, true)
+		pages.AddAndSwitchToPage("key", page, true)
+		app.SetFocus(form)
+	}
+
+	showCustomModelForm = func(provider string) {
+		modelValue := strings.TrimSpace(customModels[provider])
+		form := tview.NewForm()
+		form.AddInputField("Model", modelValue, 0, nil, func(text string) {
+			modelValue = text
+		})
+		form.AddButton("Save", func() {
+			modelValue = strings.TrimSpace(modelValue)
+			if modelValue == "" {
+				return
+			}
+			customModels[provider] = modelValue
+			showModels(provider, "detail")
+		})
+		form.AddButton("Cancel", func() {
+			showModels(provider, "detail")
+		})
+		form.SetBorder(true)
+		form.SetTitle(" Custom Model ")
+		form.SetButtonsAlign(tview.AlignLeft)
+		form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+			if event.Key() == tcell.KeyEscape {
+				showModels(provider, "detail")
+				return nil
+			}
+			return event
+		})
+		pages.AddAndSwitchToPage("custom-model", form, true)
+		app.SetFocus(form)
+	}
+
+	showModels = func(provider, backPage string) {
+		selectedProvider = provider
+		models := buildModels(provider)
+		modelList := tview.NewList()
+		modelList.ShowSecondaryText(false)
+		modelList.SetBorder(true)
+		modelList.SetTitle(" Models ")
+		for _, model := range models {
+			label := model
+			if model == defaultSelectionModel(cfg, provider, currentProvider, currentModel) {
+				label += " [default]"
+			}
+			modelName := model
+			modelList.AddItem(label, "", 0, func() {
+				if !hasConfigurableKey(strings.TrimSpace(cfg.Providers[provider].APIKey), typedAPIKeys[provider], resetKeys[provider]) {
+					showKeyForm(provider, backPage, func() {
+						showModels(provider, backPage)
+					})
+					return
+				}
+				finishSelection(provider, modelName)
+			})
+		}
+		modelList.AddItem("Custom model...", "", 0, func() {
+			showCustomModelForm(provider)
+		})
+		selectedIndex := modelIndex(cfg, provider, currentProvider, currentModel)
+		if customModel := strings.TrimSpace(customModels[provider]); customModel != "" {
+			selectedIndex = 0
+		}
+		if selectedIndex >= 0 && selectedIndex < len(models) {
+			modelList.SetCurrentItem(selectedIndex)
+		}
+		modelList.SetDoneFunc(func() {
+			showDetail(provider, backPage)
+		})
+		modelList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+			switch {
+			case event.Key() == tcell.KeyLeft || event.Key() == tcell.KeyEscape:
+				showDetail(provider, backPage)
+				return nil
+			case event.Rune() == 'q' || event.Rune() == 'Q':
+				showDetail(provider, backPage)
+				return nil
+			case event.Rune() == 'k' || event.Rune() == 'K':
+				showKeyForm(provider, backPage, func() {
+					showModels(provider, backPage)
+				})
+				return nil
+			case event.Rune() == 'c' || event.Rune() == 'C':
+				showCustomModelForm(provider)
+				return nil
+			}
+			return event
+		})
+		help := tview.NewTextView()
+		help.SetText("Enter apply   c custom model   k edit key   q/esc/← back")
+		page := tview.NewFlex()
+		page.SetDirection(tview.FlexRow)
+		page.AddItem(modelList, 0, 1, true)
+		page.AddItem(help, 1, 0, false)
+		pages.AddAndSwitchToPage("models", page, true)
+		app.SetFocus(modelList)
+	}
+
+	showCustomProviderForm = func() {
+		nameValue := ""
+		baseURLValue := ""
+		apiKeyValue := ""
+		modelValue := ""
+		form := tview.NewForm()
+		form.AddInputField("Name", "", 0, nil, func(text string) {
+			nameValue = text
+		})
+		form.AddInputField("Base URL", "", 0, nil, func(text string) {
+			baseURLValue = text
+		})
+		form.AddPasswordField("API Key", "", 0, '*', func(text string) {
+			apiKeyValue = text
+		})
+		form.AddInputField("Model", "", 0, nil, func(text string) {
+			modelValue = text
+		})
+		form.AddButton("Save", func() {
+			nameValue = strings.TrimSpace(nameValue)
+			baseURLValue = strings.TrimSpace(baseURLValue)
+			apiKeyValue = strings.TrimSpace(apiKeyValue)
+			modelValue = strings.TrimSpace(modelValue)
+			if nameValue == "" || baseURLValue == "" || apiKeyValue == "" || modelValue == "" {
+				return
+			}
+			result = ConfigureSelection{
+				Provider: uniqueCustomProviderKey(cfg, makeCustomProviderKey(nameValue)),
+				Name:     nameValue,
+				BaseURL:  baseURLValue,
+				APIKey:   apiKeyValue,
+				Model:    modelValue,
+			}
+			resultErr = nil
+			app.Stop()
+		})
+		form.AddButton("Cancel", showProviders)
+		form.SetBorder(true)
+		form.SetTitle(" Custom Provider ")
+		form.SetButtonsAlign(tview.AlignLeft)
+		form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+			if event.Key() == tcell.KeyEscape {
+				showProviders()
+				return nil
+			}
+			return event
+		})
+		pages.AddAndSwitchToPage("custom-provider", form, true)
+		app.SetFocus(form)
+	}
+
+	app.SetRoot(pages, true)
+	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyCtrlC {
+			app.Stop()
+			return nil
+		}
+		return event
+	})
+	showProviders()
+	if err := app.Run(); err != nil {
+		return ConfigureSelection{}, err
+	}
+	if resultErr != nil {
+		return ConfigureSelection{}, resultErr
+	}
+	return result, nil
 }
 
 func promptAPIKey(reader *bufio.Reader, out io.Writer, provider string) (string, error) {
@@ -720,75 +983,6 @@ func promptCustomProviderFallback(reader *bufio.Reader, out io.Writer) (Configur
 		APIKey:   apiKey,
 		Model:    model,
 	}, nil
-}
-
-func promptCustomProviderWizard(reader *bufio.Reader, out io.Writer, cfg *AppConfig) (ConfigureSelection, error) {
-	name, err := promptTextInput(reader, out, "Custom Provider", "Provider name", "Enter a display name for this provider.", false)
-	if err != nil {
-		return ConfigureSelection{}, err
-	}
-	baseURL, err := promptTextInput(reader, out, "Custom Provider", "Base URL", "Enter the Anthropic-compatible base URL.", false)
-	if err != nil {
-		return ConfigureSelection{}, err
-	}
-	apiKey, err := promptTextInput(reader, out, "Custom Provider", "API Key", "Type the API key. Characters are hidden.", true)
-	if err != nil {
-		return ConfigureSelection{}, err
-	}
-	model, err := promptTextInput(reader, out, "Custom Provider", "Model", "Enter the default model name for this provider.", false)
-	if err != nil {
-		return ConfigureSelection{}, err
-	}
-
-	key := uniqueCustomProviderKey(cfg, makeCustomProviderKey(name))
-	return ConfigureSelection{
-		Provider: key,
-		Name:     name,
-		BaseURL:  baseURL,
-		APIKey:   apiKey,
-		Model:    model,
-	}, nil
-}
-
-func promptAPIKeyMasked(reader *bufio.Reader, out io.Writer, provider string) (string, error) {
-	return promptTextInput(reader, out, "Edit API Key", "API key", "Provider: "+provider+"\nType a new key. Characters are hidden. Press Enter to confirm, Esc to cancel.", true)
-}
-
-func promptTextInput(reader *bufio.Reader, out io.Writer, title, label, hint string, secret bool) (string, error) {
-	var value []byte
-	writeTerminalFrame(out, "\033[H\033[2J"+styleTitle("claude-switch")+"\n"+styleSection(title)+"\n\n"+styleMuted(hint)+"\n\n"+styleLabel(label)+": ")
-	for {
-		b, err := reader.ReadByte()
-		if err != nil {
-			return "", err
-		}
-		switch b {
-		case '\r', '\n':
-			if len(value) == 0 {
-				writeTerminalFrame(out, "\r\n"+styleWarning("Value cannot be empty.")+"\r\n")
-				writeTerminalFrame(out, styleLabel(label)+": ")
-				continue
-			}
-			writeTerminalFrame(out, "\r\n")
-			return string(value), nil
-		case 27:
-			return "", errors.New("cancelled")
-		case 127, 8:
-			if len(value) > 0 {
-				value = value[:len(value)-1]
-				writeTerminalFrame(out, "\b \b")
-			}
-		default:
-			if b >= 32 && b <= 126 {
-				value = append(value, b)
-				if secret {
-					writeTerminalFrame(out, "*")
-				} else {
-					writeTerminalFrame(out, string(b))
-				}
-			}
-		}
-	}
 }
 
 func hasConfigurableKey(savedKey, typedKey string, resetKey bool) bool {
@@ -860,180 +1054,100 @@ func uniqueCustomProviderKey(cfg *AppConfig, base string) string {
 
 func renderProviderListScreen(out io.Writer, names []string, cfg *AppConfig, currentProvider string, selectedProvider int, statusLine string) {
 	var b strings.Builder
-	b.WriteString("\033[H\033[2J")
-	b.WriteString(styleTitle("claude-switch"))
-	b.WriteString("\n")
-	b.WriteString(styleMuted("Provider switcher for Claude Code"))
-	b.WriteString("\n\n")
-	b.WriteString(styleRule())
-	b.WriteString("\n")
-	b.WriteString(styleSection("Providers"))
-	b.WriteString("\n")
-	b.WriteString(styleMuted("Enter or → to open details"))
-	b.WriteString("\n")
+	b.WriteString("Providers\n")
 	if statusLine != "" {
-		b.WriteString(styleWarning(statusLine))
-		b.WriteString("\n\n")
+		b.WriteString(statusLine + "\n")
 	}
 	for i, name := range names {
 		if name == customProviderOption {
-			cursor := styleMuted(" ")
-			title := "custom..."
+			prefix := "  "
 			if i == selectedProvider {
-				cursor = styleSelected(">")
-				title = styleSelected(title)
+				prefix = "> "
 			}
-			fmt.Fprintf(&b, "  %s %s\n", cursor, title)
-			fmt.Fprintf(&b, "    %s\n", styleMuted("Add a custom Anthropic-compatible provider"))
-			fmt.Fprintf(&b, "    %s\n", styleDim("Save name, base URL, key, and model"))
+			fmt.Fprintf(&b, "%scustom...\n", prefix)
 			continue
 		}
 		preset, err := resolveProviderPreset(name, cfg)
 		if err != nil {
 			continue
 		}
-		status := []string{}
+		prefix := "  "
+		if i == selectedProvider {
+			prefix = "> "
+		}
+		markers := []string{}
 		if name == currentProvider {
-			status = append(status, styleBadgeCurrent("current"))
+			markers = append(markers, "current")
 		}
 		if strings.TrimSpace(cfg.Providers[name].APIKey) != "" {
-			status = append(status, styleBadgeSaved("saved"))
+			markers = append(markers, "saved")
 		}
-
-		label := ""
-		if len(status) > 0 {
-			label = " " + strings.Join(status, " ")
+		if len(markers) > 0 {
+			fmt.Fprintf(&b, "%s%s [%s]\n", prefix, providerTitle(name, cfg), strings.Join(markers, ", "))
+		} else {
+			fmt.Fprintf(&b, "%s%s\n", prefix, providerTitle(name, cfg))
 		}
-
-		cursor := styleMuted(" ")
-		title := providerTitle(name, cfg)
-		if i == selectedProvider {
-			cursor = styleSelected(">")
-			title = styleSelected(title)
-		}
-		fmt.Fprintf(&b, "  %s %s%s\n", cursor, title, label)
-		fmt.Fprintf(&b, "    %s\n", styleMuted(preset.Name))
-		fmt.Fprintf(&b, "    %s\n", styleDim(preset.BaseURL))
+		fmt.Fprintf(&b, "  %s\n", preset.BaseURL)
 	}
-	b.WriteString("\n")
-	b.WriteString(styleRule())
-	b.WriteString("\n")
-	b.WriteString(styleMuted("↑↓ provider   enter details   → details   q quit"))
-	b.WriteString("\n")
-
-	writeTerminalFrame(out, b.String())
+	fmt.Fprint(out, b.String())
 }
 
 func renderProviderInfoScreen(out io.Writer, names []string, cfg *AppConfig, currentProvider, currentModel string, selectedProvider int, statusLine string, resetKey bool) {
-	var b strings.Builder
-	b.WriteString("\033[H\033[2J")
-	b.WriteString(styleTitle("claude-switch"))
-	b.WriteString("\n")
-	b.WriteString(styleMuted("Provider details"))
-	b.WriteString("\n\n")
-	if len(names) == 0 {
-		writeTerminalFrame(out, b.String())
+	if selectedProvider < 0 || selectedProvider >= len(names) {
 		return
 	}
 	provider := names[selectedProvider]
 	preset, err := resolveProviderPreset(provider, cfg)
 	if err != nil {
-		writeTerminalFrame(out, b.String())
 		return
 	}
-	hasSavedKey := strings.TrimSpace(cfg.Providers[provider].APIKey) != ""
-	b.WriteString(styleRule())
-	b.WriteString("\n")
-	b.WriteString(styleSection("Selection"))
-	b.WriteString("\n")
+	var b strings.Builder
+	b.WriteString("Provider details\n")
 	if statusLine != "" {
-		b.WriteString(styleWarning(statusLine))
-		b.WriteString("\n\n")
+		b.WriteString(statusLine + "\n")
 	}
-	fmt.Fprintf(&b, "  %-14s %s\n", styleLabel("Provider"), styleSelected(providerTitle(provider, cfg)))
-	fmt.Fprintf(&b, "  %-14s %s\n", styleLabel("Preset"), preset.Name)
-	fmt.Fprintf(&b, "  %-14s %s\n", styleLabel("Base URL"), styleDim(preset.BaseURL))
-	fmt.Fprintf(&b, "  %-14s %s\n", styleLabel("Saved Key"), maskAPIKey(cfg.Providers[provider].APIKey))
-	fmt.Fprintf(&b, "  %-14s %s\n", styleLabel("Active"), currentProviderLabel(currentProvider)+" / "+currentModelLabel(currentModel))
+	fmt.Fprintf(&b, "Provider %s\n", providerTitle(provider, cfg))
+	fmt.Fprintf(&b, "Preset %s\n", preset.Name)
+	fmt.Fprintf(&b, "Base URL %s\n", preset.BaseURL)
+	fmt.Fprintf(&b, "Saved Key %s\n", maskAPIKey(cfg.Providers[provider].APIKey))
+	fmt.Fprintf(&b, "Active %s / %s\n", currentProviderLabel(currentProvider), currentModelLabel(currentModel))
 	if resetKey {
-		fmt.Fprintf(&b, "  %-14s %s\n", styleLabel("Key Action"), styleWarning("re-enter on apply"))
-	} else if !hasSavedKey {
-		fmt.Fprintf(&b, "  %-14s %s\n", styleLabel("Key Status"), styleWarning("no saved key"))
+		fmt.Fprintf(&b, "Key Action re-enter on apply\n")
 	}
-	b.WriteString("\n")
-	b.WriteString(styleSection("Next"))
-	b.WriteString("\n")
-	if hasSavedKey && !resetKey {
-		fmt.Fprintf(&b, "  %s\n", styleMuted("Press Enter to continue to model selection"))
-		fmt.Fprintf(&b, "  %s\n", styleMuted("Press k to replace the saved key"))
-	} else {
-		fmt.Fprintf(&b, "  %s\n", styleWarning("Press Enter to add a key and continue"))
-		fmt.Fprintf(&b, "  %s\n", styleMuted("Press k to enter a new key now"))
-	}
-	fmt.Fprintf(&b, "  %s %s\n", styleLabel("Default"), preset.Model)
-	fmt.Fprintf(&b, "  %s %d available\n", styleLabel("Models"), len(providerModels(provider)))
-	b.WriteString("\n")
-	b.WriteString(styleRule())
-	b.WriteString("\n")
-	b.WriteString(styleMuted("enter next   → next   k edit key   ← back   q back"))
-	b.WriteString("\n")
-	writeTerminalFrame(out, b.String())
+	fmt.Fprint(out, b.String())
 }
 
 func renderProviderModelsScreen(out io.Writer, names []string, cfg *AppConfig, currentProvider, currentModel string, selectedProvider, selectedModel int, statusLine string, resetKey bool) {
-	var b strings.Builder
-	b.WriteString("\033[H\033[2J")
-	b.WriteString(styleTitle("claude-switch"))
-	b.WriteString("\n")
-	b.WriteString(styleMuted("Model selection"))
-	b.WriteString("\n\n")
-	if len(names) == 0 {
-		writeTerminalFrame(out, b.String())
+	if selectedProvider < 0 || selectedProvider >= len(names) {
 		return
 	}
 	provider := names[selectedProvider]
-	preset, err := resolveProviderPreset(provider, cfg)
-	if err != nil {
-		writeTerminalFrame(out, b.String())
+	models := providerModels(cfg, provider)
+	if len(models) == 0 {
 		return
 	}
-	models := providerModels(provider)
 	if selectedModel < 0 || selectedModel >= len(models) {
 		selectedModel = 0
 	}
-	b.WriteString(styleRule())
-	b.WriteString("\n")
-	b.WriteString(styleSection("Models"))
-	b.WriteString("\n")
+	var b strings.Builder
+	b.WriteString("Models\n")
 	if statusLine != "" {
-		b.WriteString(styleWarning(statusLine))
-		b.WriteString("\n\n")
+		b.WriteString(statusLine + "\n")
 	}
-	fmt.Fprintf(&b, "  %-14s %s\n", styleLabel("Provider"), styleSelected(providerTitle(provider, cfg)))
-	fmt.Fprintf(&b, "  %-14s %s\n", styleLabel("Saved Key"), maskAPIKey(cfg.Providers[provider].APIKey))
-	fmt.Fprintf(&b, "  %-14s %s\n", styleLabel("Active"), currentProviderLabel(currentProvider)+" / "+currentModelLabel(currentModel))
+	fmt.Fprintf(&b, "Provider %s\n", providerTitle(provider, cfg))
+	fmt.Fprintf(&b, "Saved Key %s\n", maskAPIKey(cfg.Providers[provider].APIKey))
+	fmt.Fprintf(&b, "Active %s / %s\n", currentProviderLabel(currentProvider), currentModelLabel(currentModel))
 	if resetKey {
-		fmt.Fprintf(&b, "  %-14s %s\n", styleLabel("Key Action"), styleWarning("re-enter on apply"))
+		b.WriteString("Key Action re-enter on apply\n")
 	}
-	b.WriteString("\n")
 	for i, model := range models {
-		cursor := styleMuted("•")
-		line := model
+		prefix := "  "
 		if i == selectedModel {
-			cursor = styleSelected(">")
-			line = styleSelected(model)
+			prefix = "> "
 		}
-		if model == preset.Model {
-			line += " " + styleBadgeDefault("default")
-		}
-		fmt.Fprintf(&b, "  %s %s\n", cursor, line)
+		fmt.Fprintf(&b, "%s%s\n", prefix, model)
 	}
-	b.WriteString("\n")
-	b.WriteString(styleRule())
-	b.WriteString("\n")
-	b.WriteString(styleMuted("↑↓ model   enter apply   c custom model   k edit key   ← back   q back"))
-	b.WriteString("\n")
-	writeTerminalFrame(out, b.String())
+	fmt.Fprint(out, b.String())
 }
 
 func currentConfiguredProvider(cfg *AppConfig, claudeDir string) (string, string) {
@@ -1097,28 +1211,35 @@ func resolveProviderSelection(input string, names []string) (string, error) {
 	return provider, nil
 }
 
-func defaultSelectionModel(provider, currentProvider, currentModel string) string {
+func defaultSelectionModel(cfg *AppConfig, provider, currentProvider, currentModel string) string {
 	if provider == currentProvider && currentModel != "" {
-		for _, model := range providerModels(provider) {
+		for _, model := range providerModels(cfg, provider) {
 			if model == currentModel {
 				return currentModel
 			}
 		}
 	}
-	return providerPresets[provider].Model
+	preset, err := resolveProviderPreset(provider, cfg)
+	if err != nil {
+		return ""
+	}
+	return preset.Model
 }
 
-func providerModels(provider string) []string {
-	preset := providerPresets[provider]
+func providerModels(cfg *AppConfig, provider string) []string {
+	preset, err := resolveProviderPreset(provider, cfg)
+	if err != nil {
+		return nil
+	}
 	if len(preset.Models) == 0 {
 		return []string{preset.Model}
 	}
 	return preset.Models
 }
 
-func modelIndex(provider, currentProvider, currentModel string) int {
-	selected := defaultSelectionModel(provider, currentProvider, currentModel)
-	for i, model := range providerModels(provider) {
+func modelIndex(cfg *AppConfig, provider, currentProvider, currentModel string) int {
+	selected := defaultSelectionModel(cfg, provider, currentProvider, currentModel)
+	for i, model := range providerModels(cfg, provider) {
 		if model == selected {
 			return i
 		}
@@ -1163,138 +1284,6 @@ func shouldUseArrowTUI(in *os.File) bool {
 		return false
 	}
 	return (info.Mode() & os.ModeCharDevice) != 0
-}
-
-func enterRawMode(in *os.File) (func(), error) {
-	stateCmd := exec.Command("stty", "-g")
-	stateCmd.Stdin = in
-	savedState, err := stateCmd.Output()
-	if err != nil {
-		return nil, err
-	}
-
-	rawCmd := exec.Command("stty", "raw", "-echo")
-	rawCmd.Stdin = in
-	if err := rawCmd.Run(); err != nil {
-		return nil, err
-	}
-
-	return func() {
-		restoreCmd := exec.Command("stty", strings.TrimSpace(string(savedState)))
-		restoreCmd.Stdin = in
-		_ = restoreCmd.Run()
-	}, nil
-}
-
-func readKey(reader *bufio.Reader) (string, error) {
-	b, err := reader.ReadByte()
-	if err != nil {
-		return "", err
-	}
-	switch b {
-	case '\r', '\n':
-		return "enter", nil
-	case 'c', 'C':
-		return "custom_model", nil
-	case 'k', 'K':
-		return "key", nil
-	case 'q', 'Q':
-		return "quit", nil
-	case 27:
-		// ESC key: may be standalone or start of escape sequence.
-		// For standalone ESC, the next ReadByte would block.
-		// Use a goroutine to detect if a sequence follows within 50ms.
-		type result struct {
-			b   byte
-			err error
-		}
-		ch := make(chan result, 1)
-		go func() {
-			b, err := reader.ReadByte()
-			ch <- result{b, err}
-		}()
-		select {
-		case r := <-ch:
-			if r.err != nil {
-				return "", r.err
-			}
-			if r.b != '[' {
-				// Not an arrow key sequence; unread by returning empty
-				return "", nil
-			}
-			arrow, err := reader.ReadByte()
-			if err != nil {
-				return "", err
-			}
-			switch arrow {
-			case 'A':
-				return "up", nil
-			case 'B':
-				return "down", nil
-			case 'C':
-				return "right", nil
-			case 'D':
-				return "left", nil
-			}
-			return "", nil
-		case <-time.After(50 * time.Millisecond):
-			// No follow-up byte within 50ms; treat as standalone ESC
-			return "escape", nil
-		}
-	}
-	return "", nil
-}
-
-func writeTerminalFrame(out io.Writer, content string) {
-	if runtime.GOOS == "windows" {
-		fmt.Fprint(out, strings.ReplaceAll(content, "\n", "\r\n"))
-	} else {
-		fmt.Fprint(out, content)
-	}
-}
-
-func styleTitle(text string) string {
-	return "\033[1;96m" + text + "\033[0m"
-}
-
-func styleSection(text string) string {
-	return "\033[1m" + text + "\033[0m"
-}
-
-func styleLabel(text string) string {
-	return "\033[1;37m" + text + "\033[0m"
-}
-
-func styleMuted(text string) string {
-	return "\033[38;5;245m" + text + "\033[0m"
-}
-
-func styleDim(text string) string {
-	return "\033[38;5;242m" + text + "\033[0m"
-}
-
-func styleSelected(text string) string {
-	return "\033[1;97m" + text + "\033[0m"
-}
-
-func styleWarning(text string) string {
-	return "\033[1;33m" + text + "\033[0m"
-}
-
-func styleBadgeCurrent(text string) string {
-	return "\033[30;46m " + text + " \033[0m"
-}
-
-func styleBadgeSaved(text string) string {
-	return "\033[30;42m " + text + " \033[0m"
-}
-
-func styleBadgeDefault(text string) string {
-	return "\033[30;47m " + text + " \033[0m"
-}
-
-func styleRule() string {
-	return styleDim(strings.Repeat("─", 72))
 }
 
 func applyPreset(root map[string]any, preset ProviderPreset, apiKey, overrideModel string) {
