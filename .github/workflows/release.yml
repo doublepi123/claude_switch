@@ -74,6 +74,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Create and push tag
         id: tag
@@ -92,9 +94,8 @@ jobs:
             NEW_TAG="v${major}.${minor}.${new_patch}"
             echo "tag=$NEW_TAG" >> $GITHUB_OUTPUT
             echo "Created tag: $NEW_TAG"
-            git tag -d "$NEW_TAG" 2>/dev/null || true
             git tag "$NEW_TAG"
-            git push origin "$NEW_TAG" --force
+            git push origin "$NEW_TAG"
           fi
 
       - name: Download artifacts
