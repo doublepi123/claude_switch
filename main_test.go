@@ -1,10 +1,17 @@
 package main
 
 import (
+	"archive/tar"
+	"archive/zip"
 	"bytes"
+	"compress/gzip"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -29,6 +36,88 @@ func TestRunVersion(t *testing.T) {
 func TestDefaultVersionIsDev(t *testing.T) {
 	if version != "dev" {
 		t.Fatalf("version = %q, want %q", version, "dev")
+	}
+}
+
+func TestUpgradeAssetName(t *testing.T) {
+	cases := []struct {
+		goos   string
+		goarch string
+		want   string
+	}{
+		{goos: "darwin", goarch: "amd64", want: "claude-switch-darwin-amd64.tar.gz"},
+		{goos: "darwin", goarch: "arm64", want: "claude-switch-darwin-arm64.tar.gz"},
+		{goos: "linux", goarch: "amd64", want: "claude-switch-linux-amd64.tar.gz"},
+		{goos: "linux", goarch: "arm64", want: "claude-switch-linux-arm64.tar.gz"},
+		{goos: "windows", goarch: "amd64", want: "claude-switch-windows-amd64.zip"},
+	}
+
+	for _, tc := range cases {
+		got, err := upgradeAssetName(tc.goos, tc.goarch)
+		if err != nil {
+			t.Fatalf("upgradeAssetName(%q, %q) returned error: %v", tc.goos, tc.goarch, err)
+		}
+		if got != tc.want {
+			t.Fatalf("upgradeAssetName(%q, %q) = %q, want %q", tc.goos, tc.goarch, got, tc.want)
+		}
+	}
+}
+
+func TestReleaseDownloadURL(t *testing.T) {
+	if got, want := releaseDownloadURL("https://github.com/", "owner/repo", "", "asset.tar.gz"), "https://github.com/owner/repo/releases/latest/download/asset.tar.gz"; got != want {
+		t.Fatalf("latest URL = %q, want %q", got, want)
+	}
+	if got, want := releaseDownloadURL("https://github.com", "owner/repo", "v1.2.3", "asset.tar.gz"), "https://github.com/owner/repo/releases/download/v1.2.3/asset.tar.gz"; got != want {
+		t.Fatalf("tag URL = %q, want %q", got, want)
+	}
+}
+
+func TestPerformUpgradeDownloadsAndReplacesExecutable(t *testing.T) {
+	asset, err := upgradeAssetName(runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		t.Skip(err)
+	}
+	binaryName := "cs"
+	archiveBytes := makeTarGzArchive(t, binaryName, "new-binary")
+	if strings.HasSuffix(asset, ".zip") {
+		binaryName = "cs.exe"
+		archiveBytes = makeZipArchive(t, binaryName, "new-binary")
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/"+asset) {
+			t.Fatalf("unexpected download path: %s", r.URL.Path)
+		}
+		_, _ = w.Write(archiveBytes)
+	}))
+	defer server.Close()
+
+	installPath := filepath.Join(t.TempDir(), binaryName)
+	if err := os.WriteFile(installPath, []byte("old-binary"), 0o755); err != nil {
+		t.Fatalf("write old binary: %v", err)
+	}
+
+	output := &bytes.Buffer{}
+	err = performUpgrade(upgradeOptions{
+		repo:        "owner/repo",
+		installPath: installPath,
+		baseURL:     server.URL,
+		client:      server.Client(),
+		out:         output,
+	})
+	if err != nil {
+		t.Fatalf("performUpgrade returned error: %v", err)
+	}
+
+	data, err := os.ReadFile(installPath)
+	if err != nil {
+		t.Fatalf("read installed binary: %v", err)
+	}
+	if got, want := string(data), "new-binary"; got != want {
+		t.Fatalf("installed binary = %q, want %q", got, want)
+	}
+	if !strings.Contains(output.String(), "upgraded claude-switch to latest release") {
+		t.Fatalf("expected success output, got %q", output.String())
 	}
 }
 
@@ -521,7 +610,6 @@ func TestCmdConfigureResetKeyPromptsForNewValue(t *testing.T) {
 	}
 }
 
-
 func TestMaskAPIKey(t *testing.T) {
 	if got := maskAPIKey(""); got != "not saved" {
 		t.Fatalf("maskAPIKey(empty) = %q", got)
@@ -549,4 +637,46 @@ func TestHasConfigurableKey(t *testing.T) {
 			t.Fatalf("hasConfigurableKey(%q, %q, %v) = %v, want %v", tc.saved, tc.typed, tc.reset, got, tc.expected)
 		}
 	}
+}
+
+func makeTarGzArchive(t *testing.T, name, content string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gz := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gz)
+	header := &tar.Header{
+		Name: name,
+		Mode: 0o755,
+		Size: int64(len(content)),
+	}
+	if err := tw.WriteHeader(header); err != nil {
+		t.Fatalf("write tar header: %v", err)
+	}
+	if _, err := io.WriteString(tw, content); err != nil {
+		t.Fatalf("write tar content: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close tar: %v", err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatalf("close gzip: %v", err)
+	}
+	return buf.Bytes()
+}
+
+func makeZipArchive(t *testing.T, name, content string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	writer, err := zw.Create(name)
+	if err != nil {
+		t.Fatalf("create zip entry: %v", err)
+	}
+	if _, err := io.WriteString(writer, content); err != nil {
+		t.Fatalf("write zip content: %v", err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("close zip: %v", err)
+	}
+	return buf.Bytes()
 }

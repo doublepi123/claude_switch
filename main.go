@@ -1,12 +1,17 @@
 package main
 
 import (
+	"archive/tar"
+	"archive/zip"
 	"bufio"
+	"compress/gzip"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -135,6 +140,7 @@ var providerAliases = map[string]string{
 }
 
 const customProviderOption = "__custom__"
+const defaultUpgradeRepo = "doublepi123/claude_switch"
 
 var version = "dev"
 
@@ -189,6 +195,8 @@ func runWithIO(args []string, in io.Reader, out io.Writer) error {
 		return cmdSetKey(args[1:])
 	case "switch":
 		return cmdSwitch(args[1:])
+	case "upgrade":
+		return cmdUpgrade(args[1:], out)
 	case "help", "-h", "--help":
 		printUsage()
 		return nil
@@ -365,6 +373,302 @@ func cmdSwitch(args []string) error {
 	return switchProvider(provider, cfg, key, strings.TrimSpace(*model), *claudeDir)
 }
 
+func cmdUpgrade(args []string, out io.Writer) error {
+	fs := flag.NewFlagSet("upgrade", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	repo := fs.String("repo", defaultUpgradeRepo, "GitHub repository in owner/repo form")
+	tag := fs.String("tag", "", "release tag to install instead of latest")
+	installPath := fs.String("install-path", "", "override target executable path")
+	dryRun := fs.Bool("dry-run", false, "print the download URL and target path without installing")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("usage: claude-switch upgrade [--tag vX.Y.Z] [--install-path PATH]")
+	}
+
+	target := strings.TrimSpace(*installPath)
+	if target == "" {
+		exe, err := os.Executable()
+		if err != nil {
+			return fmt.Errorf("locate current executable: %w", err)
+		}
+		target = exe
+	}
+
+	opts := upgradeOptions{
+		repo:        strings.TrimSpace(*repo),
+		tag:         strings.TrimSpace(*tag),
+		installPath: target,
+		baseURL:     "https://github.com",
+		client:      http.DefaultClient,
+		out:         out,
+		dryRun:      *dryRun,
+	}
+	return performUpgrade(opts)
+}
+
+type upgradeOptions struct {
+	repo        string
+	tag         string
+	installPath string
+	baseURL     string
+	client      *http.Client
+	out         io.Writer
+	dryRun      bool
+}
+
+func performUpgrade(opts upgradeOptions) error {
+	if opts.repo == "" {
+		opts.repo = defaultUpgradeRepo
+	}
+	if opts.baseURL == "" {
+		opts.baseURL = "https://github.com"
+	}
+	if opts.client == nil {
+		opts.client = http.DefaultClient
+	}
+	if opts.out == nil {
+		opts.out = io.Discard
+	}
+
+	asset, err := upgradeAssetName(runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		return err
+	}
+	downloadURL := releaseDownloadURL(opts.baseURL, opts.repo, opts.tag, asset)
+	if opts.installPath == "" {
+		return errors.New("missing install path")
+	}
+
+	fmt.Fprintf(opts.out, "target: %s\n", opts.installPath)
+	fmt.Fprintf(opts.out, "download: %s\n", downloadURL)
+	if opts.dryRun {
+		return nil
+	}
+
+	tmpDir, err := os.MkdirTemp("", "claude-switch-upgrade-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmpDir)
+
+	archivePath := filepath.Join(tmpDir, asset)
+	if err := downloadFile(opts.client, downloadURL, archivePath); err != nil {
+		return err
+	}
+
+	binaryName := "cs"
+	if runtime.GOOS == "windows" {
+		binaryName = "cs.exe"
+	}
+	extractedPath := filepath.Join(tmpDir, binaryName)
+	if strings.HasSuffix(asset, ".zip") {
+		err = extractZipBinary(archivePath, binaryName, extractedPath)
+	} else {
+		err = extractTarGzBinary(archivePath, binaryName, extractedPath)
+	}
+	if err != nil {
+		return err
+	}
+
+	mode := os.FileMode(0o755)
+	if info, err := os.Stat(opts.installPath); err == nil {
+		mode = info.Mode().Perm() | 0o111
+	}
+	if err := os.Chmod(extractedPath, mode); err != nil {
+		return err
+	}
+	if err := replaceExecutable(extractedPath, opts.installPath); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(opts.out, "upgraded claude-switch to latest release\n")
+	return nil
+}
+
+func upgradeAssetName(goos, goarch string) (string, error) {
+	switch goarch {
+	case "amd64", "arm64":
+	default:
+		return "", fmt.Errorf("unsupported architecture for upgrade: %s", goarch)
+	}
+
+	switch goos {
+	case "darwin", "linux":
+		return fmt.Sprintf("claude-switch-%s-%s.tar.gz", goos, goarch), nil
+	case "windows":
+		return fmt.Sprintf("claude-switch-%s-%s.zip", goos, goarch), nil
+	default:
+		return "", fmt.Errorf("unsupported OS for upgrade: %s", goos)
+	}
+}
+
+func releaseDownloadURL(baseURL, repo, tag, asset string) string {
+	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	repo = strings.Trim(strings.TrimSpace(repo), "/")
+	asset = url.PathEscape(asset)
+	if strings.TrimSpace(tag) == "" || strings.TrimSpace(tag) == "latest" {
+		return fmt.Sprintf("%s/%s/releases/latest/download/%s", baseURL, repo, asset)
+	}
+	return fmt.Sprintf("%s/%s/releases/download/%s/%s", baseURL, repo, url.PathEscape(strings.TrimSpace(tag)), asset)
+}
+
+func downloadFile(client *http.Client, downloadURL, dest string) error {
+	req, err := http.NewRequest(http.MethodGet, downloadURL, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("User-Agent", "claude-switch/"+version)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("download failed: %s", resp.Status)
+	}
+
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(dest, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	_, err = io.Copy(file, resp.Body)
+	return err
+}
+
+func extractTarGzBinary(archivePath, binaryName, dest string) error {
+	file, err := os.Open(archivePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	gz, err := gzip.NewReader(file)
+	if err != nil {
+		return err
+	}
+	defer gz.Close()
+
+	reader := tar.NewReader(gz)
+	for {
+		header, err := reader.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		if header.Typeflag != tar.TypeReg || filepath.Base(header.Name) != binaryName {
+			continue
+		}
+		return writeExtractedBinary(reader, dest)
+	}
+	return fmt.Errorf("archive does not contain %s", binaryName)
+}
+
+func extractZipBinary(archivePath, binaryName, dest string) error {
+	reader, err := zip.OpenReader(archivePath)
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+
+	for _, file := range reader.File {
+		if file.FileInfo().IsDir() || filepath.Base(file.Name) != binaryName {
+			continue
+		}
+		src, err := file.Open()
+		if err != nil {
+			return err
+		}
+		defer src.Close()
+		return writeExtractedBinary(src, dest)
+	}
+	return fmt.Errorf("archive does not contain %s", binaryName)
+}
+
+func writeExtractedBinary(src io.Reader, dest string) error {
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(dest, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o700)
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(file, src); err != nil {
+		file.Close()
+		return err
+	}
+	return file.Close()
+}
+
+func replaceExecutable(src, target string) error {
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return err
+	}
+
+	backup := fmt.Sprintf("%s.old.%d", target, time.Now().UnixNano())
+	renamedExisting := false
+	if _, err := os.Stat(target); err == nil {
+		if err := os.Rename(target, backup); err != nil {
+			return fmt.Errorf("prepare existing executable for replacement: %w", err)
+		}
+		renamedExisting = true
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+
+	if err := moveFile(src, target); err != nil {
+		if renamedExisting {
+			_ = os.Rename(backup, target)
+		}
+		return fmt.Errorf("install upgraded executable: %w", err)
+	}
+	if renamedExisting {
+		_ = os.Remove(backup)
+	}
+	return nil
+}
+
+func moveFile(src, target string) error {
+	if err := os.Rename(src, target); err == nil {
+		return nil
+	}
+	if err := copyFile(src, target); err != nil {
+		return err
+	}
+	_ = os.Remove(src)
+	return nil
+}
+
+func copyFile(src, target string) error {
+	source, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer source.Close()
+
+	info, err := source.Stat()
+	if err != nil {
+		return err
+	}
+	dest, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, info.Mode().Perm())
+	if err != nil {
+		return err
+	}
+	if _, err := io.Copy(dest, source); err != nil {
+		dest.Close()
+		return err
+	}
+	return dest.Close()
+}
+
 func splitSwitchArgs(args []string) (string, []string) {
 	provider := ""
 	flagArgs := make([]string, 0, len(args))
@@ -433,6 +737,7 @@ Usage:
   cs current [--claude-dir DIR]
   cs set-key <provider> <api-key>
   cs switch <provider> [--api-key sk-xxx] [--model model-id] [--claude-dir DIR]
+  cs upgrade
 
 	Providers:
 	  deepseek
@@ -812,20 +1117,20 @@ func runArrowTUI(cfg *AppConfig, currentProvider, currentModel string) (Configur
 		}
 		detailText.SetText(b.String())
 
-		detailForm := tview.NewForm()
-		detailForm.AddButton("Choose Model", func() {
+		actions := tview.NewList()
+		actions.ShowSecondaryText(false)
+		actions.SetBorder(true)
+		actions.SetTitle(" Actions ")
+		actions.AddItem("Choose Model", "", 'm', func() {
 			showModels(provider, "detail")
 		})
-		detailForm.AddButton("Edit API Key", func() {
+		actions.AddItem("Edit API Key", "", 'k', func() {
 			showKeyForm(provider, backPage, func() {
 				showDetail(provider, backPage)
 			})
 		})
-		detailForm.AddButton("Back", showProviders)
-		detailForm.SetBorder(true)
-		detailForm.SetTitle(" Actions ")
-		detailForm.SetButtonsAlign(tview.AlignLeft)
-		detailForm.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		actions.AddItem("Back", "", 'b', showProviders)
+		actions.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 			switch {
 			case event.Key() == tcell.KeyLeft || event.Key() == tcell.KeyEscape:
 				showProviders()
@@ -845,9 +1150,9 @@ func runArrowTUI(cfg *AppConfig, currentProvider, currentModel string) (Configur
 		page := tview.NewFlex()
 		page.SetDirection(tview.FlexRow)
 		page.AddItem(detailText, 0, 1, false)
-		page.AddItem(detailForm, 8, 0, true)
+		page.AddItem(actions, 8, 0, true)
 		pages.AddAndSwitchToPage("detail", page, true)
-		app.SetFocus(detailForm)
+		app.SetFocus(actions)
 	}
 
 	showKeyForm = func(provider, backPage string, onSave func()) {
@@ -1179,7 +1484,6 @@ func uniqueCustomProviderKey(cfg *AppConfig, base string) string {
 		}
 	}
 }
-
 
 func currentConfiguredProvider(cfg *AppConfig, claudeDir string) (string, string) {
 	root, err := readJSONMap(claudeSettingsPath(claudeDir))

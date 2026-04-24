@@ -97,6 +97,12 @@ cs list
 cs --version
 ```
 
+后续升级到 GitHub Release 最新版本：
+
+```bash
+cs upgrade
+```
+
 ## 从源码安装
 
 ### macOS / Linux
@@ -199,6 +205,18 @@ cs --version
 ```
 
 从 GitHub Release 安装的二进制会显示对应 release tag。从源码直接构建时，如果当前提交没有 tag，版本会显示为 `dev`；发布构建会通过 `-ldflags` 注入 tag。
+
+升级到最新 GitHub Release：
+
+```bash
+cs upgrade
+```
+
+安装指定版本：
+
+```bash
+cs upgrade --tag v1.2.3
+```
 
 ### 2. 交互式配置
 
