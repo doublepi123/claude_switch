@@ -85,6 +85,9 @@ jobs:
           echo "tag=$NEW_TAG" >> $GITHUB_OUTPUT
           echo "Created tag: $NEW_TAG"
 
+      - name: Push tag
+        run: git push origin ${{ steps.tag.outputs.tag }}
+
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
