@@ -364,6 +364,46 @@ func TestApplyPresetDeepSeekCustomModelOverridesAllModels(t *testing.T) {
 	}
 }
 
+func TestOpenCodeGoIncludesDeepSeekV4Models(t *testing.T) {
+	models := providerPresets["opencode-go"].Models
+	for _, want := range []string{"deepseek-v4-pro", "deepseek-v4-flash"} {
+		if !containsString(models, want) {
+			t.Fatalf("opencode-go models missing %q: %v", want, models)
+		}
+	}
+}
+
+func TestApplyPresetOpenCodeGoDeepSeekV4Model(t *testing.T) {
+	root := map[string]any{}
+	applyPreset(root, providerPresets["opencode-go"], "sk-opencode", "deepseek-v4-pro")
+
+	env := root["env"].(map[string]any)
+	if got := env["ANTHROPIC_BASE_URL"]; got != "https://opencode.ai/zen/go" {
+		t.Fatalf("base url = %v, want %v", got, "https://opencode.ai/zen/go")
+	}
+	if got := env["ANTHROPIC_API_KEY"]; got != "sk-opencode" {
+		t.Fatalf("api key = %v, want %v", got, "sk-opencode")
+	}
+	if _, ok := env["ANTHROPIC_AUTH_TOKEN"]; ok {
+		t.Fatalf("expected auth token to be unset")
+	}
+	if got := env["ANTHROPIC_MODEL"]; got != "deepseek-v4-pro" {
+		t.Fatalf("model = %v, want %v", got, "deepseek-v4-pro")
+	}
+	if got := env["ANTHROPIC_DEFAULT_HAIKU_MODEL"]; got != "deepseek-v4-flash" {
+		t.Fatalf("haiku = %v, want %v", got, "deepseek-v4-flash")
+	}
+	if got := env["ANTHROPIC_DEFAULT_SONNET_MODEL"]; got != "deepseek-v4-pro" {
+		t.Fatalf("sonnet = %v, want %v", got, "deepseek-v4-pro")
+	}
+	if got := env["ANTHROPIC_DEFAULT_OPUS_MODEL"]; got != "deepseek-v4-pro" {
+		t.Fatalf("opus = %v, want %v", got, "deepseek-v4-pro")
+	}
+	if got := env["CLAUDE_CODE_SUBAGENT_MODEL"]; got != "deepseek-v4-pro" {
+		t.Fatalf("subagent = %v, want %v", got, "deepseek-v4-pro")
+	}
+}
+
 func TestResolveProviderPresetOpenRouterSavedCustomModelOverridesAllTiers(t *testing.T) {
 	cfg := &AppConfig{
 		Providers: map[string]StoredProvider{

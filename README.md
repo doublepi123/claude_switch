@@ -339,11 +339,13 @@ cs switch opencode-go --model minimax-m2.7
 ```bash
 cs switch opencode-go --model minimax-m2.7
 cs switch opencode-go --model minimax-m2.5
+cs switch opencode-go --model deepseek-v4-pro
+cs switch opencode-go --model deepseek-v4-flash
 ```
 
 不要传 `opencode-go/minimax-m2.7` 这类前缀形式；那是 OpenCode 自身配置里使用的格式，不是这里这个 Anthropic 兼容接口要的模型 ID。
 
-这个工具当前把 `opencode-go` 作为 Anthropic 兼容供应商接入，因此应使用文档中对应 `https://opencode.ai/zen/go/v1/messages` 的模型，例如 `minimax-m2.7`、`minimax-m2.5`。
+这个工具当前把 `opencode-go` 作为 Anthropic 兼容供应商接入，因此应使用文档中对应 `https://opencode.ai/zen/go/v1/messages` 的模型，例如 `minimax-m2.7`、`minimax-m2.5`、`deepseek-v4-pro`、`deepseek-v4-flash`。
 
 对于预设 provider，如果你想使用未内置的模型名，也可以在 TUI 的模型页按 `c` 直接输入任意模型名，后续会作为该 provider 的默认模型保存。
 
@@ -424,7 +426,7 @@ cs switch openrouter --api-key sk-or-xxx
 切换并覆盖模型：
 
 ```bash
-cs switch opencode-go --api-key your-key --model minimax-m2.7
+cs switch opencode-go --api-key your-key --model deepseek-v4-pro
 ```
 
 如果你在使用 `opencode-go` 时看到类似下面的错误：

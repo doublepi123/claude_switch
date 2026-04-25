@@ -24,19 +24,27 @@ import (
 	"github.com/rivo/tview"
 )
 
+type ModelTiers struct {
+	Haiku    string
+	Sonnet   string
+	Opus     string
+	Subagent string
+}
+
 type ProviderPreset struct {
-	Name      string
-	BaseURL   string
-	Model     string
-	Models    []string
-	Haiku     string
-	Sonnet    string
-	Opus      string
-	Subagent  string
-	AuthEnv   string
-	ExtraEnv  map[string]any
-	Website   string
-	APIKeyURL string
+	Name              string
+	BaseURL           string
+	Model             string
+	Models            []string
+	Haiku             string
+	Sonnet            string
+	Opus              string
+	Subagent          string
+	ModelTierOverrides map[string]ModelTiers
+	AuthEnv           string
+	ExtraEnv          map[string]any
+	Website           string
+	APIKeyURL         string
 }
 
 type StoredProvider struct {
@@ -124,10 +132,14 @@ var providerPresets = map[string]ProviderPreset{
 		Name:      "OpenCode Go",
 		BaseURL:   "https://opencode.ai/zen/go",
 		Model:     "minimax-m2.7",
-		Models:    []string{"minimax-m2.7", "minimax-m2.5"},
+		Models:    []string{"minimax-m2.7", "minimax-m2.5", "deepseek-v4-pro", "deepseek-v4-flash"},
 		Haiku:     "minimax-m2.7",
 		Sonnet:    "minimax-m2.7",
 		Opus:      "minimax-m2.7",
+		ModelTierOverrides: map[string]ModelTiers{
+			"deepseek-v4-pro":  {Haiku: "deepseek-v4-flash", Sonnet: "deepseek-v4-pro", Opus: "deepseek-v4-pro", Subagent: "deepseek-v4-pro"},
+			"deepseek-v4-flash": {Haiku: "deepseek-v4-flash", Sonnet: "deepseek-v4-flash", Opus: "deepseek-v4-flash", Subagent: "deepseek-v4-flash"},
+		},
 		Website:   "https://opencode.ai/docs/go/",
 		APIKeyURL: "https://opencode.ai",
 	},
@@ -1018,6 +1030,11 @@ func withSelectedModel(preset ProviderPreset, model string) ProviderPreset {
 		preset.Sonnet = model
 		preset.Opus = model
 		preset.Subagent = model
+	} else if tiers, ok := preset.ModelTierOverrides[model]; ok {
+		preset.Haiku = tiers.Haiku
+		preset.Sonnet = tiers.Sonnet
+		preset.Opus = tiers.Opus
+		preset.Subagent = tiers.Subagent
 	}
 	return preset
 }
