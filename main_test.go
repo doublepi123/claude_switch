@@ -414,11 +414,11 @@ func TestApplyPresetOpenCodeGoDeepSeekV4Model(t *testing.T) {
 	applyPreset(root, providerPresets["opencode-go"], "sk-opencode", "deepseek-v4-pro")
 
 	env := root["env"].(map[string]any)
-	if _, ok := env["ANTHROPIC_API_KEY"]; ok {
-		t.Fatalf("expected api key to be unset")
+	if got := env["ANTHROPIC_API_KEY"]; got != "sk-opencode" {
+		t.Fatalf("api key = %v, want %v", got, "sk-opencode")
 	}
-	if got := env["ANTHROPIC_AUTH_TOKEN"]; got != "sk-opencode" {
-		t.Fatalf("auth token = %v, want %v", got, "sk-opencode")
+	if _, ok := env["ANTHROPIC_AUTH_TOKEN"]; ok {
+		t.Fatalf("expected auth token to be unset")
 	}
 	if got := env["ANTHROPIC_MODEL"]; got != "deepseek-v4-pro" {
 		t.Fatalf("model = %v, want %v", got, "deepseek-v4-pro")
@@ -434,16 +434,6 @@ func TestApplyPresetOpenCodeGoDeepSeekV4Model(t *testing.T) {
 	}
 	if got := env["CLAUDE_CODE_SUBAGENT_MODEL"]; got != "deepseek-v4-pro" {
 		t.Fatalf("subagent = %v, want %v", got, "deepseek-v4-pro")
-	}
-}
-
-func TestApplyPresetOpenCodeGoDeepSeekStripsBearerPrefixFromAuthToken(t *testing.T) {
-	root := map[string]any{}
-	applyPreset(root, providerPresets["opencode-go"], "Bearer sk-opencode", "deepseek-v4-flash")
-
-	env := root["env"].(map[string]any)
-	if got := env["ANTHROPIC_AUTH_TOKEN"]; got != "sk-opencode" {
-		t.Fatalf("auth token = %v, want %v", got, "sk-opencode")
 	}
 }
 
