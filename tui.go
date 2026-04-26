@@ -70,14 +70,336 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 	return nil
 }
 
+type tuiState struct {
+	app             *tview.Application
+	pages           *tview.Pages
+	cfg             *AppConfig
+	currentProvider string
+	currentModel    string
+	names           []string
+
+	selectedProvider string
+	typedAPIKeys     map[string]string
+	resetKeys        map[string]bool
+	customModels     map[string]string
+
+	result   ConfigureSelection
+	resultErr error
+
+	providerList *tview.List
+	providerPage *tview.Flex
+	detailText   *tview.TextView
+}
+
+func (ts *tuiState) buildModels(provider string) []string {
+	return buildModelList(ts.cfg, provider, ts.customModels)
+}
+
+func (ts *tuiState) finishSelection(provider, model string) {
+	ts.result = ConfigureSelection{
+		Provider: provider,
+		Model:    model,
+		ResetKey: ts.resetKeys[provider],
+		APIKey:   strings.TrimSpace(ts.typedAPIKeys[provider]),
+	}
+	ts.resultErr = nil
+	ts.app.Stop()
+}
+
+func (ts *tuiState) showProviders() {
+	ts.rebuildProviderList()
+	ts.pages.SwitchToPage("providers")
+	ts.app.SetFocus(ts.providerList)
+}
+
+func (ts *tuiState) rebuildProviderList() {
+	ts.providerList.Clear()
+	selectedIndex := 0
+	for i, name := range ts.names {
+		if name == ts.selectedProvider {
+			selectedIndex = i
+		}
+		if name == customProviderOption {
+			ts.providerList.AddItem("custom...", "Add a custom Anthropic-compatible provider", 0, nil)
+			continue
+		}
+		preset, err := resolveProviderPreset(name, ts.cfg)
+		if err != nil {
+			continue
+		}
+		suffix := []string{}
+		if name == ts.currentProvider {
+			suffix = append(suffix, "current")
+		}
+		if strings.TrimSpace(ts.cfg.Providers[name].APIKey) != "" {
+			suffix = append(suffix, "saved")
+		}
+		title := providerTitle(name, ts.cfg)
+		if len(suffix) > 0 {
+			title += " [" + strings.Join(suffix, ", ") + "]"
+		}
+		ts.providerList.AddItem(title, preset.BaseURL, 0, nil)
+	}
+	ts.providerList.SetCurrentItem(selectedIndex)
+}
+
+func (ts *tuiState) showDetail(provider, backPage string) {
+	ts.selectedProvider = provider
+	preset, err := resolveProviderPreset(provider, ts.cfg)
+	if err != nil {
+		ts.resultErr = err
+		ts.app.Stop()
+		return
+	}
+
+	hasSavedKey := strings.TrimSpace(ts.cfg.Providers[provider].APIKey) != ""
+	var b strings.Builder
+	fmt.Fprintf(&b, "[::b]Provider[::-]  %s\n", providerTitle(provider, ts.cfg))
+	fmt.Fprintf(&b, "[::b]Preset[::-]    %s\n", preset.Name)
+	fmt.Fprintf(&b, "[::b]Base URL[::-]  %s\n", preset.BaseURL)
+	fmt.Fprintf(&b, "[::b]Saved Key[::-] %s\n", maskAPIKey(ts.cfg.Providers[provider].APIKey))
+	fmt.Fprintf(&b, "[::b]Active[::-]    %s / %s\n", currentProviderLabel(ts.currentProvider), currentModelLabel(ts.currentModel))
+	if ts.resetKeys[provider] {
+		fmt.Fprintf(&b, "[yellow]Pending key update on apply[-]\n")
+	} else if !hasSavedKey {
+		fmt.Fprintf(&b, "[yellow]No saved key yet[-]\n")
+	}
+	ts.detailText.SetText(b.String())
+
+	actions := tview.NewList()
+	actions.ShowSecondaryText(false)
+	actions.SetBorder(true)
+	actions.SetTitle(" Actions ")
+	actions.AddItem("Choose Model", "", 'm', func() {
+		ts.showModels(provider, "detail")
+	})
+	actions.AddItem("Edit API Key", "", 'k', func() {
+		ts.showKeyForm(provider, backPage, func() {
+			ts.showDetail(provider, backPage)
+		})
+	})
+	actions.AddItem("Back", "", 'b', ts.showProviders)
+	actions.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		switch {
+		case event.Key() == tcell.KeyLeft || event.Key() == tcell.KeyEscape:
+			ts.showProviders()
+			return nil
+		case event.Rune() == 'q' || event.Rune() == 'Q':
+			ts.showProviders()
+			return nil
+		case event.Rune() == 'k' || event.Rune() == 'K':
+			ts.showKeyForm(provider, backPage, func() {
+				ts.showDetail(provider, backPage)
+			})
+			return nil
+		}
+		return event
+	})
+
+	page := tview.NewFlex()
+	page.SetDirection(tview.FlexRow)
+	page.AddItem(ts.detailText, 0, 1, false)
+	page.AddItem(actions, 8, 0, true)
+	ts.pages.AddAndSwitchToPage("detail", page, true)
+	ts.app.SetFocus(actions)
+}
+
+func (ts *tuiState) showModels(provider, backPage string) {
+	ts.selectedProvider = provider
+	models := ts.buildModels(provider)
+	modelList := tview.NewList()
+	modelList.ShowSecondaryText(false)
+	modelList.SetBorder(true)
+	modelList.SetTitle(" Models ")
+	for _, model := range models {
+		label := model
+		if model == defaultSelectionModel(ts.cfg, provider, ts.currentProvider, ts.currentModel) {
+			label += " [default]"
+		}
+		modelName := model
+		modelList.AddItem(label, "", 0, func() {
+			if !hasConfigurableKey(strings.TrimSpace(ts.cfg.Providers[provider].APIKey), ts.typedAPIKeys[provider], ts.resetKeys[provider]) {
+				ts.showKeyForm(provider, backPage, func() {
+					ts.showModels(provider, backPage)
+				})
+				return
+			}
+			ts.finishSelection(provider, modelName)
+		})
+	}
+	modelList.AddItem("Custom model...", "", 0, func() {
+		ts.showCustomModelForm(provider)
+	})
+	selectedIndex := modelIndex(ts.cfg, provider, ts.currentProvider, ts.currentModel)
+	if customModel := strings.TrimSpace(ts.customModels[provider]); customModel != "" {
+		selectedIndex = 0
+	}
+	if selectedIndex >= 0 && selectedIndex < len(models) {
+		modelList.SetCurrentItem(selectedIndex)
+	}
+	modelList.SetDoneFunc(func() {
+		ts.showDetail(provider, backPage)
+	})
+	modelList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		switch {
+		case event.Key() == tcell.KeyLeft || event.Key() == tcell.KeyEscape:
+			ts.showDetail(provider, backPage)
+			return nil
+		case event.Rune() == 'q' || event.Rune() == 'Q':
+			ts.showDetail(provider, backPage)
+			return nil
+		case event.Rune() == 'k' || event.Rune() == 'K':
+			ts.showKeyForm(provider, backPage, func() {
+				ts.showModels(provider, backPage)
+			})
+			return nil
+		case event.Rune() == 'c' || event.Rune() == 'C':
+			ts.showCustomModelForm(provider)
+			return nil
+		}
+		return event
+	})
+	help := tview.NewTextView()
+	help.SetText("Enter apply   c custom model   k edit key   q/esc/← back")
+	page := tview.NewFlex()
+	page.SetDirection(tview.FlexRow)
+	page.AddItem(modelList, 0, 1, true)
+	page.AddItem(help, 1, 0, false)
+	ts.pages.AddAndSwitchToPage("models", page, true)
+	ts.app.SetFocus(modelList)
+}
+
+func (ts *tuiState) showKeyForm(provider, backPage string, onSave func()) {
+	currentValue := strings.TrimSpace(ts.typedAPIKeys[provider])
+	keyValue := currentValue
+	form := tview.NewForm()
+	form.AddPasswordField("API Key", currentValue, 0, '*', func(text string) {
+		keyValue = text
+	})
+	form.AddButton("Save", func() {
+		keyValue = strings.TrimSpace(keyValue)
+		ts.typedAPIKeys[provider] = keyValue
+		ts.resetKeys[provider] = true
+		onSave()
+	})
+	form.AddButton("Cancel", onSave)
+	form.SetBorder(true)
+	form.SetTitle(" Edit API Key ")
+	form.SetButtonsAlign(tview.AlignLeft)
+	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEscape {
+			onSave()
+			return nil
+		}
+		return event
+	})
+	help := tview.NewTextView()
+	help.SetText(fmt.Sprintf("Provider: %s", providerTitle(provider, ts.cfg)))
+	page := tview.NewFlex()
+	page.SetDirection(tview.FlexRow)
+	page.AddItem(help, 1, 0, false)
+	page.AddItem(form, 0, 1, true)
+	ts.pages.AddAndSwitchToPage("key", page, true)
+	ts.app.SetFocus(form)
+}
+
+func (ts *tuiState) showCustomModelForm(provider string) {
+	modelValue := strings.TrimSpace(ts.customModels[provider])
+	form := tview.NewForm()
+	form.AddInputField("Model", modelValue, 0, nil, func(text string) {
+		modelValue = text
+	})
+	form.AddButton("Save", func() {
+		modelValue = strings.TrimSpace(modelValue)
+		if modelValue == "" {
+			return
+		}
+		ts.customModels[provider] = modelValue
+		ts.showModels(provider, "detail")
+	})
+	form.AddButton("Cancel", func() {
+		ts.showModels(provider, "detail")
+	})
+	form.SetBorder(true)
+	form.SetTitle(" Custom Model ")
+	form.SetButtonsAlign(tview.AlignLeft)
+	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEscape {
+			ts.showModels(provider, "detail")
+			return nil
+		}
+		return event
+	})
+	ts.pages.AddAndSwitchToPage("custom-model", form, true)
+	ts.app.SetFocus(form)
+}
+
+func (ts *tuiState) showCustomProviderForm() {
+	nameValue := ""
+	baseURLValue := ""
+	apiKeyValue := ""
+	modelValue := ""
+	authEnvValue := ""
+	form := tview.NewForm()
+	form.AddInputField("Name", "", 0, nil, func(text string) {
+		nameValue = text
+	})
+	form.AddInputField("Base URL", "", 0, nil, func(text string) {
+		baseURLValue = text
+	})
+	form.AddPasswordField("API Key", "", 0, '*', func(text string) {
+		apiKeyValue = text
+	})
+	form.AddInputField("Model", "", 0, nil, func(text string) {
+		modelValue = text
+	})
+	form.AddDropDown("Auth Style", []string{"x-api-key (default)", "Bearer token"}, 0, func(option string, idx int) {
+		if idx == 1 {
+			authEnvValue = "ANTHROPIC_AUTH_TOKEN"
+		} else {
+			authEnvValue = ""
+		}
+	})
+	form.AddButton("Save", func() {
+		nameValue = strings.TrimSpace(nameValue)
+		baseURLValue = strings.TrimSpace(baseURLValue)
+		apiKeyValue = strings.TrimSpace(apiKeyValue)
+		modelValue = strings.TrimSpace(modelValue)
+		authEnvValue = strings.TrimSpace(authEnvValue)
+		if nameValue == "" || baseURLValue == "" || apiKeyValue == "" || modelValue == "" {
+			return
+		}
+		ts.result = ConfigureSelection{
+			Provider: uniqueCustomProviderKey(ts.cfg, makeCustomProviderKey(nameValue)),
+			Name:     nameValue,
+			BaseURL:  baseURLValue,
+			APIKey:   apiKeyValue,
+			Model:    modelValue,
+			AuthEnv:  authEnvValue,
+		}
+		ts.resultErr = nil
+		ts.app.Stop()
+	})
+	form.AddButton("Cancel", ts.showProviders)
+	form.SetBorder(true)
+	form.SetTitle(" Custom Provider ")
+	form.SetButtonsAlign(tview.AlignLeft)
+	form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEscape {
+			ts.showProviders()
+			return nil
+		}
+		return event
+	})
+	ts.pages.AddAndSwitchToPage("custom-provider", form, true)
+	ts.app.SetFocus(form)
+}
+
 func runArrowTUI(cfg *AppConfig, currentProvider, currentModel string) (ConfigureSelection, error) {
 	names := sortedProviderNames(cfg, true)
 	if len(names) == 0 {
 		return ConfigureSelection{}, errors.New("no providers configured")
 	}
-
-	app := tview.NewApplication()
-	pages := tview.NewPages()
 
 	selectedProvider := names[0]
 	for _, name := range names {
@@ -87,403 +409,98 @@ func runArrowTUI(cfg *AppConfig, currentProvider, currentModel string) (Configur
 		}
 	}
 
-	typedAPIKeys := map[string]string{}
-	resetKeys := map[string]bool{}
-	customModels := map[string]string{}
-
-	var (
-		result    ConfigureSelection
-		resultErr error = errors.New("cancelled")
-	)
-
-	buildModels := func(provider string) []string {
-		return buildModelList(cfg, provider, customModels)
+	ts := &tuiState{
+		app:              tview.NewApplication(),
+		pages:            tview.NewPages(),
+		cfg:              cfg,
+		currentProvider:  currentProvider,
+		currentModel:     currentModel,
+		names:            names,
+		selectedProvider: selectedProvider,
+		typedAPIKeys:     map[string]string{},
+		resetKeys:        map[string]bool{},
+		customModels:     map[string]string{},
+		resultErr:        errors.New("cancelled"),
 	}
 
-	finishSelection := func(provider, model string) {
-		result = ConfigureSelection{
-			Provider: provider,
-			Model:    model,
-			ResetKey: resetKeys[provider],
-			APIKey:   strings.TrimSpace(typedAPIKeys[provider]),
-		}
-		resultErr = nil
-		app.Stop()
-	}
-
-	var showProviders func()
-	var showDetail func(string, string)
-	var showModels func(string, string)
-	var showKeyForm func(string, string, func())
-	var showCustomModelForm func(string)
-	var showCustomProviderForm func()
-
-	providerList := tview.NewList()
-	providerList.ShowSecondaryText(true)
-	providerList.SetBorder(true)
-	providerList.SetTitle(" Providers ")
+	ts.providerList = tview.NewList()
+	ts.providerList.ShowSecondaryText(true)
+	ts.providerList.SetBorder(true)
+	ts.providerList.SetTitle(" Providers ")
 
 	providerHelp := tview.NewTextView()
 	providerHelp.SetText("Enter/→ details   q/esc quit")
 
-	providerPage := tview.NewFlex()
-	providerPage.SetDirection(tview.FlexRow)
-	providerPage.AddItem(providerList, 0, 1, true)
-	providerPage.AddItem(providerHelp, 1, 0, false)
-	pages.AddPage("providers", providerPage, true, true)
+	ts.providerPage = tview.NewFlex()
+	ts.providerPage.SetDirection(tview.FlexRow)
+	ts.providerPage.AddItem(ts.providerList, 0, 1, true)
+	ts.providerPage.AddItem(providerHelp, 1, 0, false)
+	ts.pages.AddPage("providers", ts.providerPage, true, true)
 
-	rebuildProviderList := func() {
-		providerList.Clear()
-		selectedIndex := 0
-		for i, name := range names {
-			if name == selectedProvider {
-				selectedIndex = i
-			}
-			if name == customProviderOption {
-				providerList.AddItem("custom...", "Add a custom Anthropic-compatible provider", 0, nil)
-				continue
-			}
-			preset, err := resolveProviderPreset(name, cfg)
-			if err != nil {
-				continue
-			}
-			suffix := []string{}
-			if name == currentProvider {
-				suffix = append(suffix, "current")
-			}
-			if strings.TrimSpace(cfg.Providers[name].APIKey) != "" {
-				suffix = append(suffix, "saved")
-			}
-			title := providerTitle(name, cfg)
-			if len(suffix) > 0 {
-				title += " [" + strings.Join(suffix, ", ") + "]"
-			}
-			providerList.AddItem(title, preset.BaseURL, 0, nil)
-		}
-		providerList.SetCurrentItem(selectedIndex)
-	}
+	ts.detailText = tview.NewTextView()
+	ts.detailText.SetDynamicColors(true)
+	ts.detailText.SetWrap(true)
+	ts.detailText.SetBorder(true)
+	ts.detailText.SetTitle(" Provider Details ")
 
-	providerList.SetChangedFunc(func(index int, mainText, secondaryText string, shortcut rune) {
+	ts.providerList.SetChangedFunc(func(index int, mainText, secondaryText string, shortcut rune) {
 		if index >= 0 && index < len(names) {
-			selectedProvider = names[index]
+			ts.selectedProvider = names[index]
 		}
 	})
-	providerList.SetSelectedFunc(func(index int, mainText, secondaryText string, shortcut rune) {
+	ts.providerList.SetSelectedFunc(func(index int, mainText, secondaryText string, shortcut rune) {
 		if index < 0 || index >= len(names) {
 			return
 		}
-		selectedProvider = names[index]
-		if selectedProvider == customProviderOption {
-			showCustomProviderForm()
+		ts.selectedProvider = names[index]
+		if ts.selectedProvider == customProviderOption {
+			ts.showCustomProviderForm()
 			return
 		}
-		showDetail(selectedProvider, "providers")
+		ts.showDetail(ts.selectedProvider, "providers")
 	})
-	providerList.SetDoneFunc(func() {
-		app.Stop()
+	ts.providerList.SetDoneFunc(func() {
+		ts.app.Stop()
 	})
-	providerList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+	ts.providerList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch {
 		case event.Key() == tcell.KeyRight:
-			index := providerList.GetCurrentItem()
+			index := ts.providerList.GetCurrentItem()
 			if index >= 0 && index < len(names) {
-				selectedProvider = names[index]
-				if selectedProvider == customProviderOption {
-					showCustomProviderForm()
+				ts.selectedProvider = names[index]
+				if ts.selectedProvider == customProviderOption {
+					ts.showCustomProviderForm()
 				} else {
-					showDetail(selectedProvider, "providers")
+					ts.showDetail(ts.selectedProvider, "providers")
 				}
 			}
 			return nil
 		case event.Key() == tcell.KeyEscape:
-			app.Stop()
+			ts.app.Stop()
 			return nil
 		case event.Rune() == 'q' || event.Rune() == 'Q':
-			app.Stop()
+			ts.app.Stop()
 			return nil
 		}
 		return event
 	})
 
-	detailText := tview.NewTextView()
-	detailText.SetDynamicColors(true)
-	detailText.SetWrap(true)
-	detailText.SetBorder(true)
-	detailText.SetTitle(" Provider Details ")
-
-	showProviders = func() {
-		rebuildProviderList()
-		pages.SwitchToPage("providers")
-		app.SetFocus(providerList)
-	}
-
-	showDetail = func(provider, backPage string) {
-		selectedProvider = provider
-		preset, err := resolveProviderPreset(provider, cfg)
-		if err != nil {
-			resultErr = err
-			app.Stop()
-			return
-		}
-		hasSavedKey := strings.TrimSpace(cfg.Providers[provider].APIKey) != ""
-		var b strings.Builder
-		fmt.Fprintf(&b, "[::b]Provider[::-]  %s\n", providerTitle(provider, cfg))
-		fmt.Fprintf(&b, "[::b]Preset[::-]    %s\n", preset.Name)
-		fmt.Fprintf(&b, "[::b]Base URL[::-]  %s\n", preset.BaseURL)
-		fmt.Fprintf(&b, "[::b]Saved Key[::-] %s\n", maskAPIKey(cfg.Providers[provider].APIKey))
-		fmt.Fprintf(&b, "[::b]Active[::-]    %s / %s\n", currentProviderLabel(currentProvider), currentModelLabel(currentModel))
-		if resetKeys[provider] {
-			fmt.Fprintf(&b, "[yellow]Pending key update on apply[-]\n")
-		} else if !hasSavedKey {
-			fmt.Fprintf(&b, "[yellow]No saved key yet[-]\n")
-		}
-		detailText.SetText(b.String())
-
-		actions := tview.NewList()
-		actions.ShowSecondaryText(false)
-		actions.SetBorder(true)
-		actions.SetTitle(" Actions ")
-		actions.AddItem("Choose Model", "", 'm', func() {
-			showModels(provider, "detail")
-		})
-		actions.AddItem("Edit API Key", "", 'k', func() {
-			showKeyForm(provider, backPage, func() {
-				showDetail(provider, backPage)
-			})
-		})
-		actions.AddItem("Back", "", 'b', showProviders)
-		actions.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-			switch {
-			case event.Key() == tcell.KeyLeft || event.Key() == tcell.KeyEscape:
-				showProviders()
-				return nil
-			case event.Rune() == 'q' || event.Rune() == 'Q':
-				showProviders()
-				return nil
-			case event.Rune() == 'k' || event.Rune() == 'K':
-				showKeyForm(provider, backPage, func() {
-					showDetail(provider, backPage)
-				})
-				return nil
-			}
-			return event
-		})
-
-		page := tview.NewFlex()
-		page.SetDirection(tview.FlexRow)
-		page.AddItem(detailText, 0, 1, false)
-		page.AddItem(actions, 8, 0, true)
-		pages.AddAndSwitchToPage("detail", page, true)
-		app.SetFocus(actions)
-	}
-
-	showKeyForm = func(provider, backPage string, onSave func()) {
-		currentValue := strings.TrimSpace(typedAPIKeys[provider])
-		keyValue := currentValue
-		form := tview.NewForm()
-		form.AddPasswordField("API Key", currentValue, 0, '*', func(text string) {
-			keyValue = text
-		})
-		form.AddButton("Save", func() {
-			keyValue = strings.TrimSpace(keyValue)
-			typedAPIKeys[provider] = keyValue
-			resetKeys[provider] = true
-			onSave()
-		})
-		form.AddButton("Cancel", onSave)
-		form.SetBorder(true)
-		form.SetTitle(" Edit API Key ")
-		form.SetButtonsAlign(tview.AlignLeft)
-		form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-			if event.Key() == tcell.KeyEscape {
-				onSave()
-				return nil
-			}
-			return event
-		})
-		help := tview.NewTextView()
-		help.SetText(fmt.Sprintf("Provider: %s", providerTitle(provider, cfg)))
-		page := tview.NewFlex()
-		page.SetDirection(tview.FlexRow)
-		page.AddItem(help, 1, 0, false)
-		page.AddItem(form, 0, 1, true)
-		pages.AddAndSwitchToPage("key", page, true)
-		app.SetFocus(form)
-	}
-
-	showCustomModelForm = func(provider string) {
-		modelValue := strings.TrimSpace(customModels[provider])
-		form := tview.NewForm()
-		form.AddInputField("Model", modelValue, 0, nil, func(text string) {
-			modelValue = text
-		})
-		form.AddButton("Save", func() {
-			modelValue = strings.TrimSpace(modelValue)
-			if modelValue == "" {
-				return
-			}
-			customModels[provider] = modelValue
-			showModels(provider, "detail")
-		})
-		form.AddButton("Cancel", func() {
-			showModels(provider, "detail")
-		})
-		form.SetBorder(true)
-		form.SetTitle(" Custom Model ")
-		form.SetButtonsAlign(tview.AlignLeft)
-		form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-			if event.Key() == tcell.KeyEscape {
-				showModels(provider, "detail")
-				return nil
-			}
-			return event
-		})
-		pages.AddAndSwitchToPage("custom-model", form, true)
-		app.SetFocus(form)
-	}
-
-	showModels = func(provider, backPage string) {
-		selectedProvider = provider
-		models := buildModels(provider)
-		modelList := tview.NewList()
-		modelList.ShowSecondaryText(false)
-		modelList.SetBorder(true)
-		modelList.SetTitle(" Models ")
-		for _, model := range models {
-			label := model
-			if model == defaultSelectionModel(cfg, provider, currentProvider, currentModel) {
-				label += " [default]"
-			}
-			modelName := model
-			modelList.AddItem(label, "", 0, func() {
-				if !hasConfigurableKey(strings.TrimSpace(cfg.Providers[provider].APIKey), typedAPIKeys[provider], resetKeys[provider]) {
-					showKeyForm(provider, backPage, func() {
-						showModels(provider, backPage)
-					})
-					return
-				}
-				finishSelection(provider, modelName)
-			})
-		}
-		modelList.AddItem("Custom model...", "", 0, func() {
-			showCustomModelForm(provider)
-		})
-		selectedIndex := modelIndex(cfg, provider, currentProvider, currentModel)
-		if customModel := strings.TrimSpace(customModels[provider]); customModel != "" {
-			selectedIndex = 0
-		}
-		if selectedIndex >= 0 && selectedIndex < len(models) {
-			modelList.SetCurrentItem(selectedIndex)
-		}
-		modelList.SetDoneFunc(func() {
-			showDetail(provider, backPage)
-		})
-		modelList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-			switch {
-			case event.Key() == tcell.KeyLeft || event.Key() == tcell.KeyEscape:
-				showDetail(provider, backPage)
-				return nil
-			case event.Rune() == 'q' || event.Rune() == 'Q':
-				showDetail(provider, backPage)
-				return nil
-			case event.Rune() == 'k' || event.Rune() == 'K':
-				showKeyForm(provider, backPage, func() {
-					showModels(provider, backPage)
-				})
-				return nil
-			case event.Rune() == 'c' || event.Rune() == 'C':
-				showCustomModelForm(provider)
-				return nil
-			}
-			return event
-		})
-		help := tview.NewTextView()
-		help.SetText("Enter apply   c custom model   k edit key   q/esc/← back")
-		page := tview.NewFlex()
-		page.SetDirection(tview.FlexRow)
-		page.AddItem(modelList, 0, 1, true)
-		page.AddItem(help, 1, 0, false)
-		pages.AddAndSwitchToPage("models", page, true)
-		app.SetFocus(modelList)
-	}
-
-	showCustomProviderForm = func() {
-		nameValue := ""
-		baseURLValue := ""
-		apiKeyValue := ""
-		modelValue := ""
-		authEnvValue := ""
-		form := tview.NewForm()
-		form.AddInputField("Name", "", 0, nil, func(text string) {
-			nameValue = text
-		})
-		form.AddInputField("Base URL", "", 0, nil, func(text string) {
-			baseURLValue = text
-		})
-		form.AddPasswordField("API Key", "", 0, '*', func(text string) {
-			apiKeyValue = text
-		})
-		form.AddInputField("Model", "", 0, nil, func(text string) {
-			modelValue = text
-		})
-		form.AddDropDown("Auth Style", []string{"x-api-key (default)", "Bearer token"}, 0, func(option string, idx int) {
-			if idx == 1 {
-				authEnvValue = "ANTHROPIC_AUTH_TOKEN"
-			} else {
-				authEnvValue = ""
-			}
-		})
-		form.AddButton("Save", func() {
-			nameValue = strings.TrimSpace(nameValue)
-			baseURLValue = strings.TrimSpace(baseURLValue)
-			apiKeyValue = strings.TrimSpace(apiKeyValue)
-			modelValue = strings.TrimSpace(modelValue)
-			authEnvValue = strings.TrimSpace(authEnvValue)
-			if nameValue == "" || baseURLValue == "" || apiKeyValue == "" || modelValue == "" {
-				return
-			}
-			result = ConfigureSelection{
-				Provider: uniqueCustomProviderKey(cfg, makeCustomProviderKey(nameValue)),
-				Name:     nameValue,
-				BaseURL:  baseURLValue,
-				APIKey:   apiKeyValue,
-				Model:    modelValue,
-				AuthEnv:  authEnvValue,
-			}
-			resultErr = nil
-			app.Stop()
-		})
-		form.AddButton("Cancel", showProviders)
-		form.SetBorder(true)
-		form.SetTitle(" Custom Provider ")
-		form.SetButtonsAlign(tview.AlignLeft)
-		form.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-			if event.Key() == tcell.KeyEscape {
-				showProviders()
-				return nil
-			}
-			return event
-		})
-		pages.AddAndSwitchToPage("custom-provider", form, true)
-		app.SetFocus(form)
-	}
-
-	app.SetRoot(pages, true)
-	app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+	ts.app.SetRoot(ts.pages, true)
+	ts.app.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		if event.Key() == tcell.KeyCtrlC {
-			app.Stop()
+			ts.app.Stop()
 			return nil
 		}
 		return event
 	})
-	showProviders()
-	if err := app.Run(); err != nil {
+	ts.showProviders()
+	if err := ts.app.Run(); err != nil {
 		return ConfigureSelection{}, err
 	}
-	if resultErr != nil {
-		return ConfigureSelection{}, resultErr
+	if ts.resultErr != nil {
+		return ConfigureSelection{}, ts.resultErr
 	}
-	return result, nil
+	return ts.result, nil
 }
 
 func promptConfigureSelectionFallback(reader *bufio.Reader, out io.Writer, cfg *AppConfig, currentProvider, currentModel string) (ConfigureSelection, error) {

@@ -126,6 +126,22 @@ var providerPresets = map[string]ProviderPreset{
 		Website:   "https://opencode.ai/docs/go/",
 		APIKeyURL: "https://opencode.ai",
 	},
+	"ollama": {
+		Name:      "Ollama (Local)",
+		BaseURL:   "http://localhost:11434/v1",
+		Model:     "qwen2.5:14b",
+		Models:    []string{"qwen2.5:14b", "qwen2.5:7b", "qwen2.5:32b", "qwen2.5:72b", "qwen2.5-coder:14b", "qwen2.5-coder:7b", "deepseek-r1:14b", "deepseek-r1:32b", "llama3.1:8b", "llama3.1:70b", "gemma3:12b", "gemma3:27b", "mistral:7b", "codellama:13b", "codellama:34b", "phi4:14b"},
+		Haiku:     "qwen2.5:7b",
+		Sonnet:    "qwen2.5:14b",
+		Opus:      "qwen2.5:32b",
+		Subagent:  "qwen2.5-coder:7b",
+		Website:   "https://ollama.com",
+		APIKeyURL: "https://ollama.com",
+		ExtraEnv: map[string]any{
+			"API_TIMEOUT_MS":                          "600000",
+			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+		},
+	},
 }
 
 var unsupportedOpenCodeGoAnthropicModels = map[string]string{
@@ -292,6 +308,8 @@ func withSelectedModel(preset ProviderPreset, model string) ProviderPreset {
 func detectProvider(baseURL, model string) string {
 	host := normalizedURLHost(baseURL)
 	switch {
+	case (host == "localhost" || host == "127.0.0.1" || host == "::1") && strings.Contains(baseURL, ":11434"):
+		return "ollama"
 	case host == "api.minimaxi.com":
 		return "minimax-cn"
 	case host == "api.minimax.io":

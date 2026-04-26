@@ -40,7 +40,7 @@ func runWithIO(args []string, in io.Reader, out io.Writer) error {
 	case "configure":
 		return cmdConfigure(args[1:], in, out)
 	case "current":
-		return cmdCurrent(args[1:])
+		return cmdCurrent(args[1:], out)
 	case "set-key":
 		return cmdSetKey(args[1:])
 	case "switch":
@@ -50,7 +50,7 @@ func runWithIO(args []string, in io.Reader, out io.Writer) error {
 	case "test":
 		return cmdTest(args[1:], out)
 	case "help", "-h", "--help":
-		printUsage()
+		printUsage(out)
 		return nil
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
@@ -90,7 +90,7 @@ func cmdList(out io.Writer) error {
 	return nil
 }
 
-func cmdCurrent(args []string) error {
+func cmdCurrent(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("current", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	claudeDir := fs.String("claude-dir", "", "override Claude config dir")
@@ -108,16 +108,16 @@ func cmdCurrent(args []string) error {
 	baseURL, _ := env["ANTHROPIC_BASE_URL"].(string)
 	model, _ := env["ANTHROPIC_MODEL"].(string)
 
-	fmt.Printf("settings: %s\n", settingsPath)
+	fmt.Fprintf(out, "settings: %s\n", settingsPath)
 	if baseURL == "" {
-		fmt.Println("provider: unknown")
+		fmt.Fprintln(out, "provider: unknown")
 		return nil
 	}
 
-	fmt.Printf("provider: %s\n", detectProvider(baseURL, model))
-	fmt.Printf("base_url: %s\n", baseURL)
+	fmt.Fprintf(out, "provider: %s\n", detectProvider(baseURL, model))
+	fmt.Fprintf(out, "base_url: %s\n", baseURL)
 	if model != "" {
-		fmt.Printf("model: %s\n", model)
+		fmt.Fprintf(out, "model: %s\n", model)
 	}
 	return nil
 }
@@ -145,8 +145,8 @@ func cmdSetKey(args []string) error {
 	return nil
 }
 
-func printUsage() {
-	fmt.Println(`claude-switch
+func printUsage(out io.Writer) {
+	fmt.Fprintln(out, `claude-switch
 
 Usage:
   cs --version
@@ -163,7 +163,8 @@ Usage:
 	  minimax-cn
 	  minimax-global
 	  openrouter
-	  opencode-go`)
+	  opencode-go
+	  ollama`)
 }
 
 func makeCustomProviderKey(name string) string {

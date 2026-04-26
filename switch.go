@@ -9,6 +9,37 @@ import (
 	"strings"
 )
 
+type providerArgs struct {
+	Provider  string
+	APIKey    string
+	Model     string
+	ClaudeDir string
+	DryRun    bool
+}
+
+func resolveProviderAndKey(providerArg, apiKeyFlag, model string) (*providerArgs, *AppConfig, error) {
+	provider := canonicalProviderName(providerArg)
+	cfg, _, err := loadAppConfig()
+	if err != nil {
+		return nil, nil, err
+	}
+	if _, err := resolveProviderPreset(provider, cfg); err != nil {
+		return nil, nil, fmt.Errorf("unsupported provider %q", providerArg)
+	}
+	key := strings.TrimSpace(apiKeyFlag)
+	if key == "" {
+		key = strings.TrimSpace(cfg.Providers[provider].APIKey)
+	}
+	if key == "" {
+		return nil, nil, fmt.Errorf("missing api key for %s, run `cs set-key %s <api-key>` or pass --api-key", provider, provider)
+	}
+	return &providerArgs{
+		Provider: provider,
+		APIKey:   key,
+		Model:    strings.TrimSpace(model),
+	}, cfg, nil
+}
+
 func cmdSwitch(args []string) error {
 	providerArg, flagArgs := splitSwitchArgs(args)
 	fs := flag.NewFlagSet("switch", flag.ContinueOnError)
@@ -24,24 +55,11 @@ func cmdSwitch(args []string) error {
 		return errors.New("usage: claude-switch switch <provider> [--api-key sk-xxx] [--model model-id]")
 	}
 
-	provider := canonicalProviderName(providerArg)
-	cfg, _, err := loadAppConfig()
+	pa, cfg, err := resolveProviderAndKey(providerArg, *apiKey, *model)
 	if err != nil {
 		return err
 	}
-	if _, err := resolveProviderPreset(provider, cfg); err != nil {
-		return fmt.Errorf("unsupported provider %q", providerArg)
-	}
-
-	key := strings.TrimSpace(*apiKey)
-	if key == "" {
-		key = strings.TrimSpace(cfg.Providers[provider].APIKey)
-	}
-	if key == "" {
-		return fmt.Errorf("missing api key for %s, run `claude-switch set-key %s <api-key>` or pass --api-key", provider, provider)
-	}
-
-	return switchProvider(provider, cfg, key, strings.TrimSpace(*model), *claudeDir, os.Stdout, *dryRun)
+	return switchProvider(pa.Provider, cfg, pa.APIKey, pa.Model, *claudeDir, os.Stdout, *dryRun)
 }
 
 func splitSwitchArgs(args []string) (string, []string) {

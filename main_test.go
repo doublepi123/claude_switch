@@ -622,6 +622,9 @@ func TestDetectProvider(t *testing.T) {
 		{baseURL: "openrouter.ai/api", want: "openrouter"},
 		{baseURL: "https://gateway.openrouter.ai/api", want: "openrouter"},
 		{baseURL: "https://example.com", want: "custom"},
+		{baseURL: "http://localhost:11434/v1", want: "ollama"},
+		{baseURL: "http://127.0.0.1:11434/v1", want: "ollama"},
+		{baseURL: "http://[::1]:11434/v1", want: "ollama"},
 	}
 
 	for _, tc := range cases {
@@ -1265,20 +1268,9 @@ func TestCmdCurrentNoSettings(t *testing.T) {
 	claudeDir := filepath.Join(home, ".claude")
 
 	output := &bytes.Buffer{}
-	oldStdout := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
-	err := cmdCurrent([]string{"--claude-dir", claudeDir})
-
-	w.Close()
-	os.Stdout = oldStdout
-	io.ReadAll(r)
-
-	if err != nil {
+	if err := cmdCurrent([]string{"--claude-dir", claudeDir}, output); err != nil {
 		t.Fatalf("cmdCurrent returned error: %v", err)
 	}
-	_ = output
 }
 
 func TestCmdCurrentWithSettings(t *testing.T) {
@@ -1297,21 +1289,11 @@ func TestCmdCurrentWithSettings(t *testing.T) {
 		t.Fatalf("write settings: %v", err)
 	}
 
-	// cmdCurrent writes to stdout, capture it
-	oldStdout := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
-	err := cmdCurrent([]string{"--claude-dir", claudeDir})
-
-	w.Close()
-	os.Stdout = oldStdout
-	outBytes, _ := io.ReadAll(r)
-
-	if err != nil {
+	output := &bytes.Buffer{}
+	if err := cmdCurrent([]string{"--claude-dir", claudeDir}, output); err != nil {
 		t.Fatalf("cmdCurrent returned error: %v", err)
 	}
-	out := string(outBytes)
+	out := output.String()
 	if !strings.Contains(out, "deepseek") {
 		t.Fatalf("expected deepseek in output, got %q", out)
 	}
@@ -1336,20 +1318,11 @@ func TestCmdCurrentUnknownProvider(t *testing.T) {
 		t.Fatalf("write settings: %v", err)
 	}
 
-	oldStdout := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
-	err := cmdCurrent([]string{"--claude-dir", claudeDir})
-
-	w.Close()
-	os.Stdout = oldStdout
-	outBytes, _ := io.ReadAll(r)
-
-	if err != nil {
+	output := &bytes.Buffer{}
+	if err := cmdCurrent([]string{"--claude-dir", claudeDir}, output); err != nil {
 		t.Fatalf("cmdCurrent returned error: %v", err)
 	}
-	out := string(outBytes)
+	out := output.String()
 	if !strings.Contains(out, "custom") {
 		t.Fatalf("expected custom in output, got %q", out)
 	}
@@ -1884,17 +1857,11 @@ func TestRunHelpFlag(t *testing.T) {
 }
 
 func TestRunHelpSubcommand(t *testing.T) {
-	// printUsage() writes to os.Stdout, so capture it
-	oldStdout := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
-	runWithIO([]string{"help"}, strings.NewReader(""), &bytes.Buffer{})
-
-	w.Close()
-	os.Stdout = oldStdout
-	outBytes, _ := io.ReadAll(r)
-	out := string(outBytes)
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"help"}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("runWithIO help returned error: %v", err)
+	}
+	out := output.String()
 	if !strings.Contains(out, "claude-switch") {
 		t.Fatalf("expected help text, got %q", out)
 	}
@@ -1927,7 +1894,7 @@ func TestCmdList(t *testing.T) {
 		t.Fatalf("cmdList returned error: %v", err)
 	}
 	out := output.String()
-	for _, want := range []string{"deepseek", "minimax-cn", "openrouter", "opencode-go"} {
+	for _, want := range []string{"deepseek", "minimax-cn", "openrouter", "opencode-go", "ollama"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("cmdList output missing %q, got %q", want, out)
 		}

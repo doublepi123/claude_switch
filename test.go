@@ -27,26 +27,17 @@ func cmdTest(args []string, out io.Writer) error {
 		return errors.New("usage: claude-switch test <provider> [--api-key sk-xxx] [--model model-id]")
 	}
 
-	provider := canonicalProviderName(providerArg)
-	cfg, _, err := loadAppConfig()
+	pa, cfg, err := resolveProviderAndKey(providerArg, *apiKey, *model)
 	if err != nil {
 		return err
 	}
 
-	preset, err := resolveSwitchPreset(provider, cfg, strings.TrimSpace(*model))
+	preset, err := resolveSwitchPreset(pa.Provider, cfg, pa.Model)
 	if err != nil {
 		return fmt.Errorf("unsupported provider %q", providerArg)
 	}
 
-	key := strings.TrimSpace(*apiKey)
-	if key == "" {
-		key = strings.TrimSpace(cfg.Providers[provider].APIKey)
-	}
-	if key == "" {
-		return fmt.Errorf("missing api key for %s, run `cs set-key %s <api-key>` or pass --api-key", provider, provider)
-	}
-
-	return testProvider(out, preset, key)
+	return testProvider(out, preset, pa.APIKey)
 }
 
 type testRequest struct {
