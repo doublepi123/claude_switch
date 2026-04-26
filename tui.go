@@ -20,6 +20,7 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 	fs.SetOutput(os.Stderr)
 	claudeDir := fs.String("claude-dir", "", "override Claude config dir")
 	resetKey := fs.Bool("reset-key", false, "force re-enter api key for the selected provider")
+	dryRun := fs.Bool("dry-run", false, "preview what would be written without modifying settings.json")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -58,6 +59,18 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 		fmt.Fprintf(out, "using saved api key for %s\n", provider)
 	}
 	upsertProviderConfig(cfg, selection, apiKey)
+
+	if *dryRun {
+		preset, err := resolveSwitchPreset(provider, cfg, selection.Model)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "[dry-run] would save provider config for %s in %s\n", provider, configPath)
+		fmt.Fprintf(out, "[dry-run] would switch Claude to %s\n", preset.Name)
+		fmt.Fprintf(out, "[dry-run] base_url: %s\n", preset.BaseURL)
+		fmt.Fprintf(out, "[dry-run] model: %s\n", preset.Model)
+		return nil
+	}
 
 	if err := writeJSONAtomic(configPath, cfg); err != nil {
 		return err

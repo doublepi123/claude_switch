@@ -1,10 +1,60 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"sort"
 	"strings"
+	"time"
 )
+
+type ollamaTagResponse struct {
+	Models []ollamaModel `json:"models"`
+}
+
+type ollamaModel struct {
+	Name string `json:"name"`
+}
+
+func discoverOllamaModels() []string {
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get("http://localhost:11434/api/tags")
+	if err != nil {
+		return nil
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+
+	var data ollamaTagResponse
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		return nil
+	}
+
+	if len(data.Models) == 0 {
+		return nil
+	}
+
+	models := make([]string, 0, len(data.Models))
+	for _, m := range data.Models {
+		name := strings.TrimSpace(m.Name)
+		if name != "" {
+			models = append(models, name)
+		}
+	}
+	sort.Strings(models)
+	return models
+}
+
+func ollamaModels() []string {
+	if discovered := discoverOllamaModels(); len(discovered) > 0 {
+		return discovered
+	}
+	return providerPresets["ollama"].Models
+}
 
 type ModelTiers struct {
 	Haiku    string
@@ -349,6 +399,11 @@ func providerModels(cfg *AppConfig, provider string) []string {
 	preset, err := resolveProviderPreset(provider, cfg)
 	if err != nil {
 		return nil
+	}
+	if provider == "ollama" {
+		if models := ollamaModels(); len(models) > 0 {
+			return models
+		}
 	}
 	if len(preset.Models) == 0 {
 		return []string{preset.Model}

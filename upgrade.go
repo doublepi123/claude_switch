@@ -5,6 +5,8 @@ import (
 	"archive/zip"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -120,6 +122,10 @@ func performUpgrade(opts upgradeOptions) error {
 	archivePath := filepath.Join(tmpDir, asset)
 	if err := downloadFile(context.Background(), opts.client, downloadURL, archivePath); err != nil {
 		return err
+	}
+
+	if err := verifyAssetChecksum(context.Background(), opts.client, opts.baseURL, opts.repo, targetTag, asset, archivePath); err != nil {
+		fmt.Fprintf(opts.out, "checksum: %v\n", err)
 	}
 
 	binaryName := "cs"
@@ -470,4 +476,99 @@ func copyFile(src, target string) error {
 		return err
 	}
 	return dest.Close()
+}
+
+func verifyAssetChecksum(ctx context.Context, client *http.Client, baseURL, repo, tag, asset, archivePath string) error {
+	type checksumEntry struct {
+		hash string
+		file string
+	}
+
+	parseChecksumFile := func(contents string) ([]checksumEntry, error) {
+		lines := strings.Split(contents, "\n")
+		var entries []checksumEntry
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if line == "" {
+				continue
+			}
+			parts := strings.Fields(line)
+			if len(parts) >= 2 {
+				entries = append(entries, checksumEntry{hash: parts[0], file: parts[1]})
+			}
+		}
+		if len(entries) == 0 {
+			return nil, fmt.Errorf("no entries in checksum file")
+		}
+		return entries, nil
+	}
+
+	findEntry := func(entries []checksumEntry, asset string) *checksumEntry {
+		for _, e := range entries {
+			if e.file == asset || e.file == "./"+asset {
+				return &e
+			}
+		}
+		return nil
+	}
+
+	// Strategy 1: try <asset>.sha256 (just the hash)
+	shaURL := releaseDownloadURL(baseURL, repo, tag, asset+".sha256")
+	shaData, err := downloadChecksumContent(ctx, client, shaURL)
+	if err == nil && strings.TrimSpace(shaData) != "" {
+		expected := strings.TrimSpace(strings.Fields(shaData)[0])
+		return validateSHA256(archivePath, expected)
+	}
+
+	// Strategy 2: try checksums.txt
+	sumURL := releaseDownloadURL(baseURL, repo, tag, "checksums.txt")
+	sumData, err := downloadChecksumContent(ctx, client, sumURL)
+	if err == nil {
+		entries, err := parseChecksumFile(sumData)
+		if err != nil {
+			return err
+		}
+		if entry := findEntry(entries, asset); entry != nil {
+			return validateSHA256(archivePath, entry.hash)
+		}
+	}
+
+	return fmt.Errorf("no checksum available (skipping verification)")
+}
+
+func downloadChecksumContent(ctx context.Context, client *http.Client, urlStr string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, urlStr, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "claude-switch/"+version)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 65536))
+	if err != nil {
+		return "", err
+	}
+	return string(body), nil
+}
+
+func validateSHA256(filePath, expected string) error {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return fmt.Errorf("read file for checksum: %w", err)
+	}
+	actual := sha256.Sum256(data)
+	actualHex := hex.EncodeToString(actual[:])
+	if actualHex != expected {
+		return fmt.Errorf("checksum mismatch: expected %s, got %s", expected, actualHex)
+	}
+	return nil
 }

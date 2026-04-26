@@ -20,11 +20,12 @@ func cmdTest(args []string, out io.Writer) error {
 	fs.SetOutput(os.Stderr)
 	apiKey := fs.String("api-key", "", "API key for the target provider")
 	model := fs.String("model", "", "model id to test with")
+	testPath := fs.String("path", "", "override API path (default: /v1/messages)")
 	if err := fs.Parse(flagArgs); err != nil {
 		return err
 	}
 	if providerArg == "" || fs.NArg() != 0 {
-		return errors.New("usage: claude-switch test <provider> [--api-key sk-xxx] [--model model-id]")
+		return errors.New("usage: claude-switch test <provider> [--api-key sk-xxx] [--model model-id] [--path /custom/api/path]")
 	}
 
 	pa, cfg, err := resolveProviderAndKey(providerArg, *apiKey, *model)
@@ -37,7 +38,7 @@ func cmdTest(args []string, out io.Writer) error {
 		return fmt.Errorf("unsupported provider %q", providerArg)
 	}
 
-	return testProvider(out, preset, pa.APIKey)
+	return testProvider(out, preset, pa.APIKey, strings.TrimSpace(*testPath))
 }
 
 type testRequest struct {
@@ -51,15 +52,19 @@ type testMessage struct {
 	Content string `json:"content"`
 }
 
-func testProvider(out io.Writer, preset ProviderPreset, apiKey string) error {
+func testProvider(out io.Writer, preset ProviderPreset, apiKey, testPath string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	return testProviderWithClient(ctx, out, preset, apiKey, &http.Client{Timeout: 15 * time.Second})
+	return testProviderWithClient(ctx, out, preset, apiKey, testPath, &http.Client{Timeout: 15 * time.Second})
 }
 
-func testProviderWithClient(ctx context.Context, out io.Writer, preset ProviderPreset, apiKey string, client *http.Client) error {
+func testProviderWithClient(ctx context.Context, out io.Writer, preset ProviderPreset, apiKey, testPath string, client *http.Client) error {
 	baseURL := strings.TrimRight(preset.BaseURL, "/")
-	testURL := baseURL + "/v1/messages"
+	tp := strings.TrimSpace(testPath)
+	if tp == "" {
+		tp = "/v1/messages"
+	}
+	testURL := baseURL + tp
 
 	fmt.Fprintf(out, "Testing %s (%s)...\n", preset.Name, preset.BaseURL)
 

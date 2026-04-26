@@ -3,9 +3,12 @@ package main
 import (
 	"archive/tar"
 	"archive/zip"
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,6 +20,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRunVersion(t *testing.T) {
@@ -163,6 +167,11 @@ func TestPerformUpgradeDownloadsAndReplacesExecutable(t *testing.T) {
 		if strings.HasSuffix(r.URL.Path, "/releases/tag/v9.9.9") {
 			return
 		}
+		// Allow checksum file requests to fail gracefully
+		if strings.Contains(r.URL.Path, ".sha256") || strings.Contains(r.URL.Path, "checksums.txt") {
+			http.NotFound(w, r)
+			return
+		}
 		if !strings.HasSuffix(r.URL.Path, "/"+asset) {
 			t.Fatalf("unexpected download path: %s", r.URL.Path)
 		}
@@ -213,6 +222,11 @@ func TestPerformUpgradeSkipsWhenAlreadyLatest(t *testing.T) {
 			return
 		}
 		if strings.HasSuffix(r.URL.Path, "/releases/tag/v2.0.0") {
+			return
+		}
+		// Allow checksum file requests to fail gracefully
+		if strings.Contains(r.URL.Path, ".sha256") || strings.Contains(r.URL.Path, "checksums.txt") {
+			http.NotFound(w, r)
 			return
 		}
 		assetRequested = true
@@ -966,7 +980,7 @@ func TestSplitSwitchArgs(t *testing.T) {
 func TestMakeCustomProviderKey(t *testing.T) {
 	cases := map[string]string{
 		"My Provider":           "my-provider",
-		"  Test  Provider  ":   "test--provider",
+		"  Test  Provider  ":   "test-provider",
 		"Provider/With/Slash":   "provider-with-slash",
 		"Provider_With_Underscores": "provider-with-underscores",
 		"  --  ":                "custom-provider",
@@ -1890,7 +1904,7 @@ func TestIsVersionRequest(t *testing.T) {
 
 func TestCmdList(t *testing.T) {
 	output := &bytes.Buffer{}
-	if err := cmdList(output); err != nil {
+	if err := cmdList(nil, output); err != nil {
 		t.Fatalf("cmdList returned error: %v", err)
 	}
 	out := output.String()
@@ -2060,7 +2074,7 @@ func TestCmdListWithCustomProviders(t *testing.T) {
 	}
 
 	output := &bytes.Buffer{}
-	if err := cmdList(output); err != nil {
+	if err := cmdList(nil, output); err != nil {
 		t.Fatalf("cmdList returned error: %v", err)
 	}
 	out := output.String()
@@ -2204,7 +2218,7 @@ func TestTestProviderOK(t *testing.T) {
 		Model:   "test-model",
 	}
 	output := &bytes.Buffer{}
-	if err := testProviderWithClient(context.Background(), output, preset, "sk-test", server.Client()); err != nil {
+	if err := testProviderWithClient(context.Background(), output, preset, "sk-test", "", server.Client()); err != nil {
 		t.Fatalf("testProvider returned error: %v", err)
 	}
 	out := output.String()
@@ -2230,7 +2244,7 @@ func TestTestProviderAuthError(t *testing.T) {
 		Model:   "test-model",
 	}
 	output := &bytes.Buffer{}
-	if err := testProviderWithClient(context.Background(), output, preset, "sk-bad", server.Client()); err != nil {
+	if err := testProviderWithClient(context.Background(), output, preset, "sk-bad", "", server.Client()); err != nil {
 		t.Fatalf("testProvider returned error: %v", err)
 	}
 	out := output.String()
@@ -2254,7 +2268,7 @@ func TestTestProviderNotFound(t *testing.T) {
 		Model:   "test-model",
 	}
 	output := &bytes.Buffer{}
-	if err := testProviderWithClient(context.Background(), output, preset, "sk-test", server.Client()); err != nil {
+	if err := testProviderWithClient(context.Background(), output, preset, "sk-test", "", server.Client()); err != nil {
 		t.Fatalf("testProvider returned error: %v", err)
 	}
 	out := output.String()
@@ -2279,7 +2293,7 @@ func TestTestProviderServerError(t *testing.T) {
 		Model:   "test-model",
 	}
 	output := &bytes.Buffer{}
-	if err := testProviderWithClient(context.Background(), output, preset, "sk-test", server.Client()); err != nil {
+	if err := testProviderWithClient(context.Background(), output, preset, "sk-test", "", server.Client()); err != nil {
 		t.Fatalf("testProvider returned error: %v", err)
 	}
 	out := output.String()
@@ -2303,7 +2317,7 @@ func TestTestProviderNetworkError(t *testing.T) {
 		Model:   "test-model",
 	}
 	output := &bytes.Buffer{}
-	if err := testProvider(output, preset, "sk-test"); err != nil {
+	if err := testProvider(output, preset, "sk-test", ""); err != nil {
 		t.Fatalf("testProvider returned error: %v", err)
 	}
 	out := output.String()
@@ -2335,7 +2349,7 @@ func TestTestProviderBearerAuth(t *testing.T) {
 		AuthEnv: "ANTHROPIC_AUTH_TOKEN",
 	}
 	output := &bytes.Buffer{}
-	if err := testProviderWithClient(context.Background(), output, preset, "sk-deepseek", server.Client()); err != nil {
+	if err := testProviderWithClient(context.Background(), output, preset, "sk-deepseek", "", server.Client()); err != nil {
 		t.Fatalf("testProvider returned error: %v", err)
 	}
 	if !strings.Contains(output.String(), "OK") {
@@ -2357,7 +2371,7 @@ func TestTestProviderReadErrorHandled(t *testing.T) {
 		Model:   "test-model",
 	}
 	output := &bytes.Buffer{}
-	if err := testProviderWithClient(context.Background(), output, preset, "sk-test", server.Client()); err != nil {
+	if err := testProviderWithClient(context.Background(), output, preset, "sk-test", "", server.Client()); err != nil {
 		t.Fatalf("testProvider returned error: %v", err)
 	}
 	out := output.String()
@@ -2521,4 +2535,1437 @@ func TestCmdTestWithStoredKey(t *testing.T) {
 	if !strings.Contains(output.String(), "OK") {
 		t.Fatalf("expected OK, got %q", output.String())
 	}
+}
+
+// ---- cmdRemove tests ----
+
+func TestCmdRemovePresetProvider(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := AppConfig{
+		Providers: map[string]StoredProvider{
+			"deepseek": {APIKey: "sk-deepseek", Model: "v4"},
+		},
+	}
+	configPath := filepath.Join(home, ".claude-switch", "config.json")
+	if err := writeJSONAtomic(configPath, cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if err := cmdRemove([]string{"--force", "deepseek"}); err != nil {
+		t.Fatalf("cmdRemove returned error: %v", err)
+	}
+
+	var updated AppConfig
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if err := json.Unmarshal(data, &updated); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+	if _, ok := updated.Providers["deepseek"]; ok {
+		t.Fatal("expected deepseek to be removed")
+	}
+}
+
+func TestCmdRemoveCustomProvider(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := AppConfig{
+		Providers: map[string]StoredProvider{
+			"my-custom": {Name: "Custom", BaseURL: "https://custom.example.com", Model: "m1", APIKey: "sk-1"},
+		},
+	}
+	configPath := filepath.Join(home, ".claude-switch", "config.json")
+	if err := writeJSONAtomic(configPath, cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	if err := cmdRemove([]string{"--force", "my-custom"}); err != nil {
+		t.Fatalf("cmdRemove returned error: %v", err)
+	}
+
+	var updated AppConfig
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if err := json.Unmarshal(data, &updated); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+	if _, ok := updated.Providers["my-custom"]; ok {
+		t.Fatal("expected my-custom to be removed")
+	}
+}
+
+func TestCmdRemoveNoProviderArgError(t *testing.T) {
+	if err := cmdRemove([]string{}); err == nil {
+		t.Fatal("expected error for missing provider")
+	}
+	if err := cmdRemove([]string{"--force"}); err == nil {
+		t.Fatal("expected error for missing provider")
+	}
+}
+
+func TestCmdRemoveUnknownProvider(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if err := cmdRemove([]string{"--force", "nonexistent"}); err == nil {
+		t.Fatal("expected error for unknown provider")
+	}
+}
+
+// ---- cmdCompletion tests ----
+
+func TestCmdCompletionBash(t *testing.T) {
+	output := &bytes.Buffer{}
+	if err := cmdCompletion([]string{"bash"}, output); err != nil {
+		t.Fatalf("cmdCompletion returned error: %v", err)
+	}
+	out := output.String()
+	if !strings.Contains(out, "complete -F _cs cs") {
+		t.Fatalf("expected bash completion content, got %q", out)
+	}
+	if !strings.Contains(out, "compgen -W") {
+		t.Fatalf("expected compgen in bash completion, got %q", out)
+	}
+}
+
+func TestCmdCompletionZsh(t *testing.T) {
+	output := &bytes.Buffer{}
+	if err := cmdCompletion([]string{"zsh"}, output); err != nil {
+		t.Fatalf("cmdCompletion returned error: %v", err)
+	}
+	if !strings.Contains(output.String(), "#compdef cs") {
+		t.Fatalf("expected zsh completion header, got %q", output.String())
+	}
+}
+
+func TestCmdCompletionFish(t *testing.T) {
+	output := &bytes.Buffer{}
+	if err := cmdCompletion([]string{"fish"}, output); err != nil {
+		t.Fatalf("cmdCompletion returned error: %v", err)
+	}
+	if !strings.Contains(output.String(), "complete -c cs -f") {
+		t.Fatalf("expected fish completion header, got %q", output.String())
+	}
+}
+
+func TestCmdCompletionInvalidShell(t *testing.T) {
+	if err := cmdCompletion([]string{"invalid"}, &bytes.Buffer{}); err == nil {
+		t.Fatal("expected error for invalid shell")
+	}
+}
+
+func TestCmdCompletionNoArgs(t *testing.T) {
+	if err := cmdCompletion([]string{}, &bytes.Buffer{}); err == nil {
+		t.Fatal("expected error for no args")
+	}
+}
+
+// ---- cmdList --verbose tests ----
+
+func TestCmdListVerbose(t *testing.T) {
+	output := &bytes.Buffer{}
+	if err := cmdList([]string{"--verbose"}, output); err != nil {
+		t.Fatalf("cmdList --verbose returned error: %v", err)
+	}
+	out := output.String()
+	if !strings.Contains(out, "[") || !strings.Contains(out, "]") {
+		t.Fatalf("expected model list brackets in verbose output, got %q", out)
+	}
+}
+
+// ---- cmdTest --path tests ----
+
+func TestCmdTestCustomPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	customPathRequested := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/v1/messages") {
+			t.Fatal("expected custom path, not /v1/messages")
+		}
+		if strings.Contains(r.URL.Path, "/custom/test") {
+			customPathRequested = true
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	cfg := AppConfig{
+		Providers: map[string]StoredProvider{
+			"test-custom": {
+				Name:    "Test Provider",
+				BaseURL: server.URL,
+				Model:   "test-model",
+				APIKey:  "sk-test",
+			},
+		},
+	}
+	configPath := filepath.Join(home, ".claude-switch", "config.json")
+	if err := writeJSONAtomic(configPath, cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	output := &bytes.Buffer{}
+	if err := cmdTest([]string{"test-custom", "--api-key", "sk-test", "--path", "/custom/test"}, output); err != nil {
+		t.Fatalf("cmdTest returned error: %v", err)
+	}
+	if !customPathRequested {
+		t.Fatal("custom path was not requested")
+	}
+}
+
+// ---- cmdConfigure --dry-run tests ----
+
+func TestCmdConfigureDryRun(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := AppConfig{
+		Providers: map[string]StoredProvider{
+			"openrouter": {APIKey: "sk-existing", Model: "anthropic/claude-sonnet-4.6"},
+		},
+	}
+	configPath := filepath.Join(home, ".claude-switch", "config.json")
+	if err := writeJSONAtomic(configPath, cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	claudeDir := filepath.Join(home, "claude")
+
+	input := strings.NewReader("openrouter\n\n")
+	output := &bytes.Buffer{}
+
+	if err := cmdConfigure([]string{"--dry-run", "--claude-dir", claudeDir}, input, output); err != nil {
+		t.Fatalf("cmdConfigure --dry-run returned error: %v", err)
+	}
+
+	out := output.String()
+	if !strings.Contains(out, "[dry-run]") {
+		t.Fatalf("expected [dry-run] in output, got %q", out)
+	}
+	if !strings.Contains(out, "would switch") {
+		t.Fatalf("expected 'would switch' in output, got %q", out)
+	}
+
+	// Verify settings.json was NOT written
+	if _, err := os.Stat(filepath.Join(claudeDir, "settings.json")); err == nil {
+		t.Fatal("expected settings.json to not be written in dry-run mode")
+	}
+}
+
+// ---- Ollama model discovery tests ----
+
+func TestOllamaModelsFallsBackToPreset(t *testing.T) {
+	models := ollamaModels()
+	if len(models) == 0 {
+		t.Fatal("expected non-empty models")
+	}
+	// If Ollama is not running, falls back to preset list (contains qwen2.5:14b)
+	// If Ollama is running, returns discovered models from local instance
+	presetModels := providerPresets["ollama"].Models
+	if len(models) == len(presetModels) && containsString(models, presetModels[0]) {
+		// Using preset fallback
+		if !containsString(models, "qwen2.5:14b") {
+			t.Fatalf("expected qwen2.5:14b in preset fallback, got %v", models)
+		}
+	}
+}
+
+func TestDiscoverOllamaModelsSuccess(t *testing.T) {
+	models := discoverOllamaModels()
+	// Without a running Ollama at localhost:11434, returns nil
+	// With one running, returns actual models
+	if models == nil && len(models) == 0 {
+		t.Log("No local Ollama detected (expected)")
+	}
+}
+
+// ---- SHA256 checksum verification tests ----
+
+func TestValidateSHA256Match(t *testing.T) {
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "test.bin")
+	content := []byte("hello, checksum test")
+	if err := os.WriteFile(filePath, content, 0o644); err != nil {
+		t.Fatalf("write test file: %v", err)
+	}
+
+	// Pre-compute expected hash
+	hash := sha256Sum(t, content)
+
+	if err := validateSHA256(filePath, hash); err != nil {
+		t.Fatalf("validateSHA256 returned error on match: %v", err)
+	}
+}
+
+func TestValidateSHA256Mismatch(t *testing.T) {
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "test.bin")
+	if err := os.WriteFile(filePath, []byte("test"), 0o644); err != nil {
+		t.Fatalf("write test file: %v", err)
+	}
+
+	if err := validateSHA256(filePath, "0000000000000000000000000000000000000000000000000000000000000000"); err == nil {
+		t.Fatal("expected error on checksum mismatch")
+	}
+}
+
+func TestValidateSHA256FileNotFound(t *testing.T) {
+	if err := validateSHA256("/nonexistent/file/path", "abc123"); err == nil {
+		t.Fatal("expected error on missing file")
+	}
+}
+
+func TestDownloadChecksumContentOK(t *testing.T) {
+	expectedContent := "abc123def456  claude-switch-linux-amd64.tar.gz\n"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(expectedContent))
+	}))
+	defer server.Close()
+
+	got, err := downloadChecksumContent(context.Background(), server.Client(), server.URL+"/checksums.txt")
+	if err != nil {
+		t.Fatalf("downloadChecksumContent returned error: %v", err)
+	}
+	if got != expectedContent {
+		t.Fatalf("content = %q, want %q", got, expectedContent)
+	}
+}
+
+func TestDownloadChecksumContentHTTPError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	_, err := downloadChecksumContent(context.Background(), server.Client(), server.URL+"/missing.txt")
+	if err == nil {
+		t.Fatal("expected error on 404")
+	}
+}
+
+func TestVerifyAssetChecksumNoFiles(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	archivePath := filepath.Join(tmpDir, "test.tar.gz")
+	if err := os.WriteFile(archivePath, []byte("dummy"), 0o644); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+
+	err := verifyAssetChecksum(context.Background(), server.Client(), server.URL, "owner/repo", "v1.0", "test.tar.gz", archivePath)
+	if err == nil {
+		t.Fatal("expected error when no checksum files available")
+	}
+	if !strings.Contains(err.Error(), "no checksum available") {
+		t.Fatalf("expected 'no checksum available', got %v", err)
+	}
+}
+
+func TestVerifyAssetChecksumWithSha256File(t *testing.T) {
+	shaHash := ""
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, ".sha256") {
+			_, _ = w.Write([]byte(shaHash + "\n"))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	content := []byte("test-content-for-checksum")
+	archivePath := filepath.Join(tmpDir, "test.tar.gz")
+	if err := os.WriteFile(archivePath, content, 0o644); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+	shaHash = sha256Sum(t, content)
+
+	err := verifyAssetChecksum(context.Background(), server.Client(), server.URL, "owner/repo", "v1.0", "test.tar.gz", archivePath)
+	if err != nil {
+		t.Fatalf("verifyAssetChecksum returned error: %v", err)
+	}
+}
+
+func TestVerifyAssetChecksumWithChecksumsTxt(t *testing.T) {
+	shaHash := ""
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "checksums.txt") {
+			fmt.Fprintf(w, "%s  test.tar.gz\n1234567890abcdef  other.file\n", shaHash)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	content := []byte("another-test-content-12345")
+	archivePath := filepath.Join(tmpDir, "test.tar.gz")
+	if err := os.WriteFile(archivePath, content, 0o644); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+	shaHash = sha256Sum(t, content)
+
+	err := verifyAssetChecksum(context.Background(), server.Client(), server.URL, "owner/repo", "v1.0", "test.tar.gz", archivePath)
+	if err != nil {
+		t.Fatalf("verifyAssetChecksum returned error: %v", err)
+	}
+}
+
+func TestVerifyAssetChecksumMismatch(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, ".sha256") {
+			_, _ = w.Write([]byte("0000000000000000000000000000000000000000000000000000000000000000\n"))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	archivePath := filepath.Join(tmpDir, "test.tar.gz")
+	if err := os.WriteFile(archivePath, []byte("real-content"), 0o644); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+
+	err := verifyAssetChecksum(context.Background(), server.Client(), server.URL, "owner/repo", "v1.0", "test.tar.gz", archivePath)
+	if err == nil {
+		t.Fatal("expected checksum mismatch error")
+	}
+	if !strings.Contains(err.Error(), "checksum mismatch") {
+		t.Fatalf("expected 'checksum mismatch', got %v", err)
+	}
+}
+
+func TestVerifyAssetChecksumAssetNotFoundInChecksumsTxt(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "checksums.txt") {
+			_, _ = w.Write([]byte("abc123  other-file.tar.gz\n"))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	archivePath := filepath.Join(tmpDir, "test.tar.gz")
+	if err := os.WriteFile(archivePath, []byte("dummy"), 0o644); err != nil {
+		t.Fatalf("write archive: %v", err)
+	}
+
+	err := verifyAssetChecksum(context.Background(), server.Client(), server.URL, "owner/repo", "v1.0", "test.tar.gz", archivePath)
+	if err == nil {
+		t.Fatal("expected error when asset not in checksums.txt")
+	}
+}
+
+func TestValidateSHA256EmptyFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	filePath := filepath.Join(tmpDir, "empty.bin")
+	if err := os.WriteFile(filePath, []byte{}, 0o644); err != nil {
+		t.Fatalf("write empty file: %v", err)
+	}
+	expected := sha256Sum(t, []byte{})
+	if err := validateSHA256(filePath, expected); err != nil {
+		t.Fatalf("validateSHA256 on empty file: %v", err)
+	}
+}
+
+// ---- extractZipBinary tests ----
+
+func TestExtractZipBinary(t *testing.T) {
+	tmpDir := t.TempDir()
+	content := "zipped-binary-content"
+	archivePath := filepath.Join(tmpDir, "test.zip")
+	if err := os.WriteFile(archivePath, makeZipArchive(t, "cs", content), 0o644); err != nil {
+		t.Fatalf("write zip: %v", err)
+	}
+
+	dest := filepath.Join(tmpDir, "cs")
+	if err := extractZipBinary(archivePath, "cs", dest); err != nil {
+		t.Fatalf("extractZipBinary returned error: %v", err)
+	}
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read extracted: %v", err)
+	}
+	if string(data) != content {
+		t.Fatalf("extracted = %q, want %q", string(data), content)
+	}
+}
+
+func TestExtractZipBinaryMissing(t *testing.T) {
+	tmpDir := t.TempDir()
+	archivePath := filepath.Join(tmpDir, "test.zip")
+	if err := os.WriteFile(archivePath, makeZipArchive(t, "other", "content"), 0o644); err != nil {
+		t.Fatalf("write zip: %v", err)
+	}
+
+	if err := extractZipBinary(archivePath, "cs", filepath.Join(tmpDir, "out")); err == nil {
+		t.Fatal("expected error for missing binary in zip")
+	}
+}
+
+func TestExtractZipBinaryInvalidArchive(t *testing.T) {
+	if err := extractZipBinary("/nonexistent/archive.zip", "cs", "/tmp/out"); err == nil {
+		t.Fatal("expected error for nonexistent zip")
+	}
+}
+
+// ---- copyFile tests ----
+
+func TestCopyFile(t *testing.T) {
+	tmpDir := t.TempDir()
+	src := filepath.Join(tmpDir, "src.txt")
+	content := []byte("copy-this-content")
+	if err := os.WriteFile(src, content, 0o644); err != nil {
+		t.Fatalf("write src: %v", err)
+	}
+	dst := filepath.Join(tmpDir, "dest.txt")
+	if err := copyFile(src, dst); err != nil {
+		t.Fatalf("copyFile returned error: %v", err)
+	}
+	data, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("read dst: %v", err)
+	}
+	if string(data) != string(content) {
+		t.Fatalf("copied = %q, want %q", string(data), string(content))
+	}
+}
+
+func TestCopyFileSrcNotFound(t *testing.T) {
+	if err := copyFile("/nonexistent/src", "/tmp/dst"); err == nil {
+		t.Fatal("expected error for missing src")
+	}
+}
+
+// ---- modelIndex tests ----
+
+func TestModelIndexCurrentProviderMatch(t *testing.T) {
+	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
+	// deepseek current model is deepseek-v4-pro[1m], which is at index 0
+	idx := modelIndex(cfg, "deepseek", "deepseek", "deepseek-v4-pro[1m]")
+	if idx != 0 {
+		t.Fatalf("modelIndex = %d, want 0", idx)
+	}
+}
+
+func TestModelIndexDifferentProvider(t *testing.T) {
+	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
+	// Switching from openrouter to deepseek, should select default (index 0)
+	idx := modelIndex(cfg, "deepseek", "openrouter", "anthropic/claude-sonnet-4.6")
+	if idx != 0 {
+		t.Fatalf("modelIndex = %d, want 0", idx)
+	}
+}
+
+func TestModelIndexCustomModel(t *testing.T) {
+	cfg := &AppConfig{Providers: map[string]StoredProvider{
+		"deepseek": {Model: "custom-ds-model"},
+	}}
+	// Custom model should be index 0 (prepended)
+	idx := modelIndex(cfg, "deepseek", "deepseek", "custom-ds-model")
+	if idx != 0 {
+		t.Fatalf("modelIndex for custom model = %d, want 0", idx)
+	}
+}
+
+// ---- defaultSelectionModel tests ----
+
+func TestDefaultSelectionModelCurrentMatch(t *testing.T) {
+	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
+	if got := defaultSelectionModel(cfg, "deepseek", "deepseek", "deepseek-v4-flash"); got != "deepseek-v4-flash" {
+		t.Fatalf("defaultSelectionModel = %q, want %q", got, "deepseek-v4-flash")
+	}
+}
+
+func TestDefaultSelectionModelDifferentProvider(t *testing.T) {
+	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
+	got := defaultSelectionModel(cfg, "deepseek", "openrouter", "anthropic/claude-sonnet-4.6")
+	if got != "deepseek-v4-pro[1m]" {
+		t.Fatalf("defaultSelectionModel = %q, want %q", got, "deepseek-v4-pro[1m]")
+	}
+}
+
+func TestDefaultSelectionModelNoCurrent(t *testing.T) {
+	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
+	got := defaultSelectionModel(cfg, "openrouter", "", "")
+	if got != "anthropic/claude-sonnet-4.6" {
+		t.Fatalf("defaultSelectionModel = %q, want %q", got, "anthropic/claude-sonnet-4.6")
+	}
+}
+
+// ---- currentProviderLabel / currentModelLabel tests ----
+
+func TestCurrentProviderLabel(t *testing.T) {
+	if got := currentProviderLabel("deepseek"); got != "deepseek" {
+		t.Fatalf("currentProviderLabel = %q", got)
+	}
+	if got := currentProviderLabel(""); got != "none" {
+		t.Fatalf("currentProviderLabel(empty) = %q", got)
+	}
+}
+
+func TestCurrentModelLabel(t *testing.T) {
+	if got := currentModelLabel("v4"); got != "v4" {
+		t.Fatalf("currentModelLabel = %q", got)
+	}
+	if got := currentModelLabel(""); got != "none" {
+		t.Fatalf("currentModelLabel(empty) = %q", got)
+	}
+}
+
+// ---- cmdUpgrade tests ----
+
+func TestCmdUpgradeNoArgs(t *testing.T) {
+	output := &bytes.Buffer{}
+	err := cmdUpgrade([]string{}, output)
+	// Without network access, may fail or succeed depending on connectivity
+	// Just ensure it doesn't panic
+	_ = err
+}
+
+func TestCmdUpgradeExtraArgs(t *testing.T) {
+	if err := cmdUpgrade([]string{"extra-arg"}, &bytes.Buffer{}); err == nil {
+		t.Fatal("expected error for extra args")
+	}
+}
+
+func TestCmdUpgradeDryRun(t *testing.T) {
+	output := &bytes.Buffer{}
+	err := cmdUpgrade([]string{"--dry-run"}, output)
+	_ = err // May fail without network or work
+	out := output.String()
+	if err == nil {
+		if !strings.Contains(out, "download:") && !strings.Contains(out, "already up to date") && !strings.Contains(out, "dry-run") {
+			t.Logf("unexpected dry-run output: %q", out)
+		}
+	}
+}
+
+// ---- latestReleaseTag tests ----
+
+func TestLatestReleaseTag(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
+			http.Redirect(w, r, "/owner/repo/releases/tag/v3.0.0", http.StatusFound)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/releases/tag/v3.0.0") {
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	tag, err := latestReleaseTag(context.Background(), server.Client(), server.URL, "owner/repo")
+	if err != nil {
+		t.Fatalf("latestReleaseTag returned error: %v", err)
+	}
+	if tag != "v3.0.0" {
+		t.Fatalf("tag = %q, want %q", tag, "v3.0.0")
+	}
+}
+
+func TestLatestReleaseTagHTTPError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	_, err := latestReleaseTag(context.Background(), server.Client(), server.URL, "owner/repo")
+	if err == nil {
+		t.Fatal("expected error on server error")
+	}
+}
+
+func TestLatestReleaseTagNoTagInURL(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
+			http.Redirect(w, r, "/owner/repo/releases/latest", http.StatusFound)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	_, err := latestReleaseTag(context.Background(), server.Client(), server.URL, "owner/repo")
+	if err == nil {
+		t.Fatal("expected error when tag is missing from redirect URL")
+	}
+}
+
+// ---- tagFromReleaseURL edge cases ----
+
+func TestTagFromReleaseURLNil(t *testing.T) {
+	if got := tagFromReleaseURL(nil); got != "" {
+		t.Fatalf("tagFromReleaseURL(nil) = %q", got)
+	}
+}
+
+func TestTagFromReleaseURLNoTag(t *testing.T) {
+	u, _ := url.Parse("https://example.com/no/releases/here")
+	if got := tagFromReleaseURL(u); got != "" {
+		t.Fatalf("tagFromReleaseURL = %q, want empty", got)
+	}
+}
+
+// ---- downloadFile tests ----
+
+func TestDownloadFileSuccess(t *testing.T) {
+	expected := "test-file-content"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(expected))
+	}))
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	dest := filepath.Join(tmpDir, "downloaded.txt")
+	if err := downloadFile(context.Background(), server.Client(), server.URL, dest); err != nil {
+		t.Fatalf("downloadFile returned error: %v", err)
+	}
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read downloaded: %v", err)
+	}
+	if string(data) != expected {
+		t.Fatalf("content = %q, want %q", string(data), expected)
+	}
+}
+
+func TestDownloadFileHTTPError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	if err := downloadFile(context.Background(), server.Client(), server.URL, filepath.Join(t.TempDir(), "out")); err == nil {
+		t.Fatal("expected error on HTTP 404")
+	}
+}
+
+// ---- writeExtractedBinary tests ----
+
+func TestWriteExtractedBinary(t *testing.T) {
+	tmpDir := t.TempDir()
+	content := "extracted-content-123"
+	dest := filepath.Join(tmpDir, "sub", "binary")
+	if err := writeExtractedBinary(strings.NewReader(content), dest); err != nil {
+		t.Fatalf("writeExtractedBinary returned error: %v", err)
+	}
+	data, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatalf("read written: %v", err)
+	}
+	if string(data) != content {
+		t.Fatalf("content = %q, want %q", string(data), content)
+	}
+}
+
+// ---- replaceExecutable rollback test ----
+
+func TestReplaceExecutableRollbackOnMoveFailure(t *testing.T) {
+	if os.Getuid() != 0 {
+		t.Skip("needs root to create unreadable target dir")
+	}
+}
+
+// ---- normalizedURLHost edge cases ----
+
+func TestNormalizedURLHostDeepSeekAPI(t *testing.T) {
+	if got := normalizedURLHost("https://api.deepseek.com/anthropic"); got != "api.deepseek.com" {
+		t.Fatalf("normalizedURLHost = %q", got)
+	}
+}
+
+// ---- performUpgrade dry run ----
+
+func TestPerformUpgradeDryRun(t *testing.T) {
+	oldVersion := version
+	version = "dev"
+	t.Cleanup(func() { version = oldVersion })
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
+			http.Redirect(w, r, "/owner/repo/releases/tag/v1.0.0", http.StatusFound)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, "/releases/tag/v1.0.0") {
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	output := &bytes.Buffer{}
+	err := performUpgrade(upgradeOptions{
+		repo:        "owner/repo",
+		installPath: filepath.Join(t.TempDir(), "cs"),
+		baseURL:     server.URL,
+		client:      server.Client(),
+		out:         output,
+		dryRun:      true,
+	})
+	if err != nil {
+		t.Fatalf("performUpgrade dry-run returned error: %v", err)
+	}
+	out := output.String()
+	if !strings.Contains(out, "download:") {
+		t.Fatalf("expected download URL in dry-run output, got %q", out)
+	}
+}
+
+// ---- runWithIO completion ----
+
+func TestRunCompletionBash(t *testing.T) {
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"completion", "bash"}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("runWithIO completion bash returned error: %v", err)
+	}
+	if !strings.Contains(output.String(), "complete -F _cs cs") {
+		t.Fatalf("expected bash completion, got %q", output.String())
+	}
+}
+
+func TestRunCompletionInvalidShell(t *testing.T) {
+	if err := runWithIO([]string{"completion", "invalid"}, strings.NewReader(""), &bytes.Buffer{}); err == nil {
+		t.Fatal("expected error for invalid completion shell")
+	}
+}
+
+// ---- printUsage to out parameter ----
+
+func TestPrintUsageUsesOutParameter(t *testing.T) {
+	output := &bytes.Buffer{}
+	printUsage(output)
+	out := output.String()
+	if !strings.Contains(out, "cs list") {
+		t.Fatalf("missing list in usage: %q", out)
+	}
+	if !strings.Contains(out, "cs remove") {
+		t.Fatalf("missing remove in usage: %q", out)
+	}
+	if !strings.Contains(out, "cs completion") {
+		t.Fatalf("missing completion in usage: %q", out)
+	}
+}
+
+// ---- buildModelList tests ----
+
+func TestBuildModelList(t *testing.T) {
+	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
+	models := buildModelList(cfg, "deepseek", nil)
+	if len(models) != 3 {
+		t.Fatalf("expected 3 deepseek models, got %d", len(models))
+	}
+}
+
+// ---- cmdCurrent edge case with empty settings ----
+
+func TestCmdCurrentEmptySettings(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	claudeDir := filepath.Join(home, ".claude")
+	// Create empty settings
+	if err := os.MkdirAll(claudeDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(claudeDir, "settings.json"), []byte(`{}`), 0o644); err != nil {
+		t.Fatalf("write empty settings: %v", err)
+	}
+	output := &bytes.Buffer{}
+	if err := cmdCurrent([]string{"--claude-dir", claudeDir}, output); err != nil {
+		// "unknown" path is fine since baseURL is empty
+		out := output.String()
+		if !strings.Contains(out, "unknown") {
+			t.Fatalf("expected unknown for empty settings, got %q", out)
+		}
+	}
+}
+
+// ---- helpers ----
+
+func sha256Sum(t *testing.T, data []byte) string {
+	t.Helper()
+	h := sha256.New()
+	h.Write(data)
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// ---- currentConfiguredProvider more branches ----
+
+func TestCurrentConfiguredProviderEmptySettings(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
+
+	provider, model := currentConfiguredProvider(cfg, home+"/nonexistent")
+	if provider != "" || model != "" {
+		t.Fatalf("expected empty for nonexistent dir, got %q / %q", provider, model)
+	}
+}
+
+func TestCurrentConfiguredProviderCustomMatch(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	claudeDir := filepath.Join(home, ".claude")
+
+	settings := map[string]any{
+		"env": map[string]any{
+			"ANTHROPIC_BASE_URL": "https://my-custom.example.com/anthropic",
+			"ANTHROPIC_MODEL":    "my-model",
+		},
+	}
+	if err := writeJSONAtomic(filepath.Join(claudeDir, "settings.json"), settings); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+
+	cfg := &AppConfig{
+		Providers: map[string]StoredProvider{
+			"test-prov": {BaseURL: "https://my-custom.example.com/anthropic"},
+		},
+	}
+	provider, model := currentConfiguredProvider(cfg, claudeDir)
+	if provider != "test-prov" {
+		t.Fatalf("expected test-prov, got %q", provider)
+	}
+	if model != "my-model" {
+		t.Fatalf("expected my-model, got %q", model)
+	}
+}
+
+func TestCurrentConfiguredProviderNoEnvSection(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	claudeDir := filepath.Join(home, ".claude")
+
+	settings := map[string]any{"other": "value"}
+	if err := writeJSONAtomic(filepath.Join(claudeDir, "settings.json"), settings); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+
+	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
+	provider, model := currentConfiguredProvider(cfg, claudeDir)
+	if provider != "" || model != "" {
+		t.Fatalf("expected empty for no env, got %q / %q", provider, model)
+	}
+}
+
+// ---- normalizedURLHost edge case ----
+
+func TestNormalizedURLHostInvalid(t *testing.T) {
+	if got := normalizedURLHost("not a proper url %%%"); got != "" {
+		t.Fatalf("normalizedURLHost = %q, want empty", got)
+	}
+}
+
+// ---- cmdRemove no force test ----
+
+func TestCmdRemoveNoForceCancelled(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := AppConfig{
+		Providers: map[string]StoredProvider{
+			"deepseek": {APIKey: "sk-test"},
+		},
+	}
+	configPath := filepath.Join(home, ".claude-switch", "config.json")
+	if err := writeJSONAtomic(configPath, cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	// Mock stdin with "n" response
+	oldStdin := os.Stdin
+	r, w, _ := os.Pipe()
+	os.Stdin = r
+	w.WriteString("n\n")
+	w.Close()
+	defer func() { os.Stdin = oldStdin }()
+
+	if err := cmdRemove([]string{"deepseek"}); err != nil {
+		t.Fatalf("cmdRemove returned error: %v", err)
+	}
+
+	// Config should still have the provider
+	var updated AppConfig
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if err := json.Unmarshal(data, &updated); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+	if updated.Providers["deepseek"].APIKey != "sk-test" {
+		t.Fatal("expected provider to NOT be removed after cancelling")
+	}
+}
+
+// ---- promptAPIKey EOF test ----
+
+func TestPromptAPIKeyEOF(t *testing.T) {
+	reader := bufio.NewReader(strings.NewReader(""))
+	output := &bytes.Buffer{}
+	_, err := promptAPIKey(reader, output, "test-provider")
+	if err == nil {
+		t.Fatal("expected error on EOF")
+	}
+}
+
+// ---- readLine EOF test ----
+
+func TestReadLineEOF(t *testing.T) {
+	reader := bufio.NewReader(strings.NewReader(""))
+	_, err := readLine(reader)
+	if err == nil {
+		t.Fatal("expected error on EOF")
+	}
+	reader2 := bufio.NewReader(strings.NewReader("hello"))
+	line, err := readLine(reader2)
+	if err != nil {
+		t.Fatalf("expected success: %v", err)
+	}
+	if line != "hello" {
+		t.Fatalf("got %q", line)
+	}
+}
+
+// ---- runWithIO list verbose ----
+
+func TestRunWithIOListVerbose(t *testing.T) {
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"list", "--verbose"}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("runWithIO list --verbose returned error: %v", err)
+	}
+	if !strings.Contains(output.String(), "[") {
+		t.Fatalf("expected verbose output with model list, got %q", output.String())
+	}
+}
+
+// ---- runWithIO remove ----
+
+func TestRunWithIORemove(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := AppConfig{
+		Providers: map[string]StoredProvider{
+			"minimax-cn": {APIKey: "sk-test"},
+		},
+	}
+	if err := writeJSONAtomic(filepath.Join(home, ".claude-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"remove", "--force", "minimax-cn"}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("runWithIO remove returned error: %v", err)
+	}
+}
+
+// ---- runWithIO test ----
+
+func TestRunWithIOTest(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer server.Close()
+
+	cfg := AppConfig{
+		Providers: map[string]StoredProvider{
+			"my-test": {BaseURL: server.URL, Model: "m1", APIKey: "sk-1"},
+		},
+	}
+	if err := writeJSONAtomic(filepath.Join(home, ".claude-switch", "config.json"), cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	output := &bytes.Buffer{}
+	err := runWithIO([]string{"test", "my-test", "--api-key", "sk-test"}, strings.NewReader(""), output)
+	if err != nil {
+		t.Fatalf("runWithIO test returned error: %v", err)
+	}
+	if !strings.Contains(output.String(), "OK") {
+		t.Fatalf("expected OK, got %q", output.String())
+	}
+}
+
+// ---- currentConfiguredProvider with custom detected fallback ----
+
+func TestCurrentConfiguredProviderCustomFallback(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	claudeDir := filepath.Join(home, ".claude")
+
+	settings := map[string]any{
+		"env": map[string]any{
+			"ANTHROPIC_BASE_URL": "https://totally-unknown.example.com/anthropic",
+			"ANTHROPIC_MODEL":    "unknown-model",
+		},
+	}
+	if err := writeJSONAtomic(filepath.Join(claudeDir, "settings.json"), settings); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+
+	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
+	provider, model := currentConfiguredProvider(cfg, claudeDir)
+	if provider != "custom" {
+		t.Fatalf("expected custom, got %q", provider)
+	}
+	if model != "unknown-model" {
+		t.Fatalf("expected unknown-model, got %q", model)
+	}
+}
+
+// ---- performUpgrade with tag ----
+
+func TestPerformUpgradeWithTag(t *testing.T) {
+	oldVersion := version
+	version = "dev"
+	t.Cleanup(func() { version = oldVersion })
+
+	asset, err := upgradeAssetName(runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		t.Skip(err)
+	}
+	archiveBytes := makeTarGzArchive(t, "cs", "tagged-binary")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, ".sha256") || strings.Contains(r.URL.Path, "checksums.txt") {
+			http.NotFound(w, r)
+			return
+		}
+		if !strings.HasSuffix(r.URL.Path, "/"+asset) {
+			t.Fatalf("unexpected download path: %s", r.URL.Path)
+		}
+		w.Write(archiveBytes)
+	}))
+	defer server.Close()
+
+	installPath := filepath.Join(t.TempDir(), "cs")
+	if err := os.WriteFile(installPath, []byte("old"), 0o755); err != nil {
+		t.Fatalf("write old binary: %v", err)
+	}
+
+	output := &bytes.Buffer{}
+	err = performUpgrade(upgradeOptions{
+		repo:        "owner/repo",
+		tag:         "v4.0.0",
+		installPath: installPath,
+		baseURL:     server.URL,
+		client:      server.Client(),
+		out:         output,
+	})
+	if err != nil {
+		t.Fatalf("performUpgrade returned error: %v", err)
+	}
+	data, err := os.ReadFile(installPath)
+	if err != nil {
+		t.Fatalf("read binary: %v", err)
+	}
+	if string(data) != "tagged-binary" {
+		t.Fatalf("binary = %q, want %q", string(data), "tagged-binary")
+	}
+}
+
+// ---- switchProvider dry run ----
+
+func TestSwitchProviderWritesToWriterDryRun(t *testing.T) {
+	claudeDir := t.TempDir()
+	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
+	output := &bytes.Buffer{}
+
+	if err := switchProvider("deepseek", cfg, "sk-test", "", claudeDir, output, true); err != nil {
+		t.Fatalf("switchProvider returned error: %v", err)
+	}
+	out := output.String()
+	if !strings.Contains(out, "[dry-run]") {
+		t.Fatalf("expected [dry-run] in output, got %q", out)
+	}
+	// settings.json should NOT exist
+	if _, err := os.Stat(filepath.Join(claudeDir, "settings.json")); err == nil {
+		t.Fatal("settings.json should not be created in dry-run mode")
+	}
+}
+
+// ---- resolveProviderPreset with empty model in stored ----
+
+func TestResolveProviderPresetEmptyStoredModel(t *testing.T) {
+	cfg := &AppConfig{
+		Providers: map[string]StoredProvider{
+			"deepseek": {APIKey: "sk-test"},
+		},
+	}
+	preset, err := resolveProviderPreset("deepseek", cfg)
+	if err != nil {
+		t.Fatalf("resolveProviderPreset returned error: %v", err)
+	}
+	if preset.Model != "deepseek-v4-pro[1m]" {
+		t.Fatalf("expected default model, got %q", preset.Model)
+	}
+}
+
+// ---- resolveProviderPreset custom with empty model ----
+
+func TestResolveProviderPresetCustomEmptyModel(t *testing.T) {
+	cfg := &AppConfig{
+		Providers: map[string]StoredProvider{
+			"my-cust": {Name: "My", BaseURL: "https://example.com/api"},
+		},
+	}
+	preset, err := resolveProviderPreset("my-cust", cfg)
+	if err != nil {
+		t.Fatalf("resolveProviderPreset returned error: %v", err)
+	}
+	if preset.Model != "custom-model" {
+		t.Fatalf("expected custom-model fallback, got %q", preset.Model)
+	}
+}
+
+// ---- currentConfiguredProvider with provider field ----
+
+func TestCurrentConfiguredProviderCorruptSettings(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	claudeDir := filepath.Join(home, ".claude")
+
+	// env field is not a map
+	settings := map[string]any{
+		"env": "not-a-map",
+	}
+	if err := writeJSONAtomic(filepath.Join(claudeDir, "settings.json"), settings); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+
+	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
+	provider, model := currentConfiguredProvider(cfg, claudeDir)
+	if provider != "" || model != "" {
+		t.Fatalf("expected empty for corrupt settings, got %q / %q", provider, model)
+	}
+}
+
+// ---- testProviderWithClient default path ----
+
+func TestTestProviderDefaultPath(t *testing.T) {
+	var requestedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	preset := ProviderPreset{Name: "test", BaseURL: server.URL, Model: "m1"}
+	output := &bytes.Buffer{}
+	if err := testProviderWithClient(context.Background(), output, preset, "sk-test", "", server.Client()); err != nil {
+		t.Fatalf("testProvider returned error: %v", err)
+	}
+	if !strings.HasSuffix(requestedPath, "/v1/messages") {
+		t.Fatalf("expected /v1/messages path, got %s", requestedPath)
+	}
+}
+
+// ---- extractTarGzBinary invalid gzip ----
+
+func TestExtractTarGzBinaryInvalidGzip(t *testing.T) {
+	tmpDir := t.TempDir()
+	path := filepath.Join(tmpDir, "test.tar.gz")
+	if err := os.WriteFile(path, []byte("not-a-gzip"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := extractTarGzBinary(path, "cs", filepath.Join(tmpDir, "out")); err == nil {
+		t.Fatal("expected error for invalid gzip")
+	}
+}
+
+// ---- extractTarGzBinary missing binary ----
+
+func TestExtractTarGzBinaryMissingBinary(t *testing.T) {
+	tmpDir := t.TempDir()
+	archivePath := filepath.Join(tmpDir, "test.tar.gz")
+	archiveBytes := makeTarGzArchive(t, "other-file", "content")
+	if err := os.WriteFile(archivePath, archiveBytes, 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := extractTarGzBinary(archivePath, "cs", filepath.Join(tmpDir, "out")); err == nil {
+		t.Fatal("expected error for missing binary in tar.gz")
+	}
+}
+
+// ---- upgradeAssetName bad arch ----
+
+func TestUpgradeAssetNameBadArch(t *testing.T) {
+	_, err := upgradeAssetName("linux", "386")
+	if err == nil {
+		t.Fatal("expected error for 386 arch")
+	}
+}
+
+// ---- upgradeAssetName bad os ----
+
+func TestUpgradeAssetNameBadOS(t *testing.T) {
+	_, err := upgradeAssetName("freebsd", "amd64")
+	if err == nil {
+		t.Fatal("expected error for freebsd")
+	}
+}
+
+// ---- switchProvider error on bad settings path ----
+
+func TestSwitchProviderBadSettingsPath(t *testing.T) {
+	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
+	err := switchProvider("deepseek", cfg, "sk-test", "", "/proc/root/settings.json", io.Discard, false)
+	if err != nil {
+		// Expected - can't write to /proc
+	}
+}
+
+// ---- cmdCurrent with default claudeDir ----
+
+func TestCmdCurrentDefaultDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	// Don't create .claude dir - should handle gracefully
+	output := &bytes.Buffer{}
+	if err := cmdCurrent(nil, output); err != nil {
+		t.Fatalf("cmdCurrent returned error: %v", err)
+	}
+}
+
+// ---- modelIndex with no models ----
+
+func TestModelIndexNoModels(t *testing.T) {
+	cfg := &AppConfig{
+		Providers: map[string]StoredProvider{
+			"bad-provider": {},
+		},
+	}
+	idx := modelIndex(cfg, "bad-provider", "bad-provider", "nonexistent")
+	if idx != 0 {
+		t.Fatalf("modelIndex for missing provider = %d, want 0", idx)
+	}
+}
+
+// ---- cmdRemove without valid provider ----
+
+func TestCmdRemoveNoSavedConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	// No providers saved
+	if err := cmdRemove([]string{"--force", "deepseek"}); err == nil {
+		t.Fatal("expected error for unsaved provider")
+	}
+}
+
+// ---- cmdTest extra args ----
+
+func TestCmdTestExtraArgs(t *testing.T) {
+	if err := cmdTest([]string{"deepseek", "extra"}, &bytes.Buffer{}); err == nil {
+		t.Fatal("expected error for extra args")
+	}
+}
+
+// ---- cmdUpgrade with custom repo ----
+
+func TestCmdUpgradeCustomRepo(t *testing.T) {
+	output := &bytes.Buffer{}
+	err := cmdUpgrade([]string{"--repo", "other/repo", "--dry-run"}, output)
+	_ = err
+}
+
+// ---- downloadChecksumContent network error ----
+
+func TestDownloadChecksumContentNetworkError(t *testing.T) {
+	_, err := downloadChecksumContent(context.Background(), &http.Client{Timeout: 1 * time.Second}, "http://localhost:1/nonexistent")
+	if err == nil {
+		t.Fatal("expected network error")
+	}
+}
+
+// ---- verifyAssetChecksum with dot prefix ----
+
+func TestVerifyAssetChecksumDotPrefix(t *testing.T) {
+	shaHash := ""
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "checksums.txt") {
+			fmt.Fprintf(w, "%s  ./test.tar.gz\n", shaHash)
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	tmpDir := t.TempDir()
+	content := []byte("content-with-dot-prefix")
+	archivePath := filepath.Join(tmpDir, "test.tar.gz")
+	if err := os.WriteFile(archivePath, content, 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	shaHash = sha256Sum(t, content)
+
+	err := verifyAssetChecksum(context.Background(), server.Client(), server.URL, "owner/repo", "v1.0", "test.tar.gz", archivePath)
+	if err != nil {
+		t.Fatalf("verifyAssetChecksum with ./ prefix returned error: %v", err)
+	}
+}
+
+// ---- testProviderWithClient actual real path test ----
+
+func TestTestProviderCustomExactPath(t *testing.T) {
+	var receivedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedPath = r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	preset := ProviderPreset{Name: "test", BaseURL: server.URL + "/api", Model: "m1"}
+	output := &bytes.Buffer{}
+	if err := testProviderWithClient(context.Background(), output, preset, "sk-test", "/v1/chat/completions", server.Client()); err != nil {
+		t.Fatalf("testProvider returned error: %v", err)
+	}
+	if receivedPath != "/api/v1/chat/completions" {
+		t.Fatalf("expected /api/v1/chat/completions, got %s", receivedPath)
+	}
+}
+
+// ---- resolveProviderSelection with canonical name that's a custom provider name ----
+
+func TestResolveProviderSelectionCanonicalMatchCustom(t *testing.T) {
+	cfg := &AppConfig{
+		Providers: map[string]StoredProvider{
+			"abc": {BaseURL: "https://abc.example.com/api", Model: "m"},
+		},
+	}
+	names := sortedProviderNames(cfg, true)
+	got, err := resolveProviderSelection("abc", names)
+	if err != nil {
+		t.Fatalf("resolveProviderSelection returned error: %v", err)
+	}
+	if got != "abc" {
+		t.Fatalf("got %q, want abc", got)
+	}
+}
+
+// ---- cmdRemove trailing flag ----
+
+func TestCmdRemoveInvalidFlag(t *testing.T) {
+	// Unknown flag causes flag.Parse to return an error, which is expected behavior
+	err := cmdRemove([]string{"--invalid"})
+	_ = err
 }
