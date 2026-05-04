@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"io"
@@ -50,7 +51,7 @@ func runWithIO(args []string, in io.Reader, out io.Writer) error {
 	case "test":
 		return cmdTest(args[1:], out)
 	case "remove":
-		return cmdRemove(args[1:])
+		return cmdRemove(args[1:], in, out)
 	case "completion":
 		return cmdCompletion(args[1:], out)
 	case "help", "-h", "--help":
@@ -160,7 +161,7 @@ func cmdSetKey(args []string) error {
 	return nil
 }
 
-func cmdRemove(args []string) error {
+func cmdRemove(args []string, in io.Reader, out io.Writer) error {
 	if len(args) == 0 {
 		return fmt.Errorf("usage: claude-switch remove <provider> [--force]")
 	}
@@ -190,17 +191,20 @@ func cmdRemove(args []string) error {
 
 	if !*force {
 		showKey := maskAPIKey(stored.APIKey)
-		fmt.Printf("Remove saved config for %s (key: %s)? [y/N]: ", provider, showKey)
-		var response string
-		fmt.Scanln(&response)
+		fmt.Fprintf(out, "Remove saved config for %s (key: %s)? [y/N]: ", provider, showKey)
+		reader := bufio.NewReader(in)
+		response, err := readLine(reader)
+		if err != nil {
+			return fmt.Errorf("read confirmation: %w", err)
+		}
 		if strings.ToLower(strings.TrimSpace(response)) != "y" {
-			fmt.Println("cancelled")
+			fmt.Fprintln(out, "cancelled")
 			return nil
 		}
 	}
 
 	delete(cfg.Providers, provider)
-	fmt.Fprintf(os.Stdout, "removed %s from %s\n", provider, path)
+	fmt.Fprintf(out, "removed %s from %s\n", provider, path)
 	return writeJSONAtomic(path, cfg)
 }
 

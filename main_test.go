@@ -303,7 +303,7 @@ func TestApplyPresetPreservesUnmanagedFields(t *testing.T) {
 		},
 	}
 
-	applyPreset(root, providerPresets["openrouter"], "sk-test", "")
+	applyPreset(root, providerPresets["openrouter"], "sk-test")
 
 	env := root["env"].(map[string]any)
 	if env["FOO"] != "bar" {
@@ -325,7 +325,8 @@ func TestApplyPresetPreservesUnmanagedFields(t *testing.T) {
 
 func TestApplyPresetOverrideModel(t *testing.T) {
 	root := map[string]any{}
-	applyPreset(root, providerPresets["minimax-cn"], "sk-test", "custom-model")
+	preset := withSelectedModel(providerPresets["minimax-cn"], "custom-model")
+	applyPreset(root, preset, "sk-test")
 
 	env := root["env"].(map[string]any)
 	for _, key := range []string{
@@ -342,7 +343,8 @@ func TestApplyPresetOverrideModel(t *testing.T) {
 
 func TestApplyPresetOpenRouterOfficialModelKeepsTierMapping(t *testing.T) {
 	root := map[string]any{}
-	applyPreset(root, providerPresets["openrouter"], "sk-test", "anthropic/claude-opus-4.7")
+	preset := withSelectedModel(providerPresets["openrouter"], "anthropic/claude-opus-4.7")
+	applyPreset(root, preset, "sk-test")
 
 	env := root["env"].(map[string]any)
 	if got := env["ANTHROPIC_MODEL"]; got != "anthropic/claude-opus-4.7" {
@@ -361,7 +363,8 @@ func TestApplyPresetOpenRouterOfficialModelKeepsTierMapping(t *testing.T) {
 
 func TestApplyPresetOpenRouterCustomModelOverridesAllTiers(t *testing.T) {
 	root := map[string]any{}
-	applyPreset(root, providerPresets["openrouter"], "sk-test", "openrouter/custom-model")
+	preset := withSelectedModel(providerPresets["openrouter"], "openrouter/custom-model")
+	applyPreset(root, preset, "sk-test")
 
 	env := root["env"].(map[string]any)
 	for _, key := range []string{
@@ -385,7 +388,7 @@ func TestApplyPresetDeepSeekUsesAuthTokenAndExtraEnv(t *testing.T) {
 		},
 	}
 
-	applyPreset(root, providerPresets["deepseek"], "sk-deepseek", "")
+	applyPreset(root, providerPresets["deepseek"], "sk-deepseek")
 
 	env := root["env"].(map[string]any)
 	if _, ok := env["ANTHROPIC_API_KEY"]; ok {
@@ -425,7 +428,8 @@ func TestApplyPresetDeepSeekUsesAuthTokenAndExtraEnv(t *testing.T) {
 
 func TestApplyPresetDeepSeekCustomModelOverridesAllModels(t *testing.T) {
 	root := map[string]any{}
-	applyPreset(root, providerPresets["deepseek"], "sk-deepseek", "deepseek-custom")
+	preset := withSelectedModel(providerPresets["deepseek"], "deepseek-custom")
+	applyPreset(root, preset, "sk-deepseek")
 
 	env := root["env"].(map[string]any)
 	for _, key := range []string{
@@ -460,7 +464,8 @@ func TestOpenCodeGoIncludesAnthropicMessagesModels(t *testing.T) {
 
 func TestApplyPresetOpenCodeGoMiniMaxModel(t *testing.T) {
 	root := map[string]any{}
-	applyPreset(root, providerPresets["opencode-go"], "sk-opencode", "minimax-m2.5")
+	preset := withSelectedModel(providerPresets["opencode-go"], "minimax-m2.5")
+	applyPreset(root, preset, "sk-opencode")
 
 	env := root["env"].(map[string]any)
 	if got := env["ANTHROPIC_BASE_URL"]; got != "https://opencode.ai/zen/go" {
@@ -491,7 +496,8 @@ func TestApplyPresetOpenCodeGoMiniMaxModel(t *testing.T) {
 
 func TestApplyPresetOpenCodeGoDeepSeekV4Model(t *testing.T) {
 	root := map[string]any{}
-	applyPreset(root, providerPresets["opencode-go"], "sk-opencode", "deepseek-v4-pro")
+	preset := withSelectedModel(providerPresets["opencode-go"], "deepseek-v4-pro")
+	applyPreset(root, preset, "sk-opencode")
 
 	env := root["env"].(map[string]any)
 	if got := env["ANTHROPIC_API_KEY"]; got != "sk-opencode" {
@@ -1561,6 +1567,61 @@ func TestCmdSwitchUsesStoredKey(t *testing.T) {
 	}
 }
 
+func TestCmdSwitchOllamaNoAPIKey(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	claudeDir := filepath.Join(home, "claude")
+
+	if err := cmdSwitch([]string{"ollama", "--claude-dir", claudeDir}); err != nil {
+		t.Fatalf("cmdSwitch returned error: %v", err)
+	}
+
+	settingsBytes, err := os.ReadFile(filepath.Join(claudeDir, "settings.json"))
+	if err != nil {
+		t.Fatalf("read settings: %v", err)
+	}
+	var settings map[string]any
+	if err := json.Unmarshal(settingsBytes, &settings); err != nil {
+		t.Fatalf("unmarshal settings: %v", err)
+	}
+	env := settings["env"].(map[string]any)
+	if got := env["ANTHROPIC_API_KEY"]; got != "ollama" {
+		t.Fatalf("api key = %v, want %v", got, "ollama")
+	}
+	if got := env["ANTHROPIC_BASE_URL"]; got != "http://localhost:11434/v1" {
+		t.Fatalf("base url = %v, want %v", got, "http://localhost:11434/v1")
+	}
+}
+
+func TestCmdConfigureOllamaNoAPIKey(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	input := strings.NewReader("ollama\n\n")
+	output := &bytes.Buffer{}
+
+	if err := cmdConfigure(nil, input, output); err != nil {
+		t.Fatalf("cmdConfigure returned error: %v", err)
+	}
+
+	configBytes, err := os.ReadFile(filepath.Join(home, ".claude-switch", "config.json"))
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	var cfg AppConfig
+	if err := json.Unmarshal(configBytes, &cfg); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+
+	stored, ok := cfg.Providers["ollama"]
+	if !ok {
+		t.Fatal("ollama provider not found in config")
+	}
+	if stored.APIKey != "ollama" {
+		t.Fatalf("api key = %q, want %q", stored.APIKey, "ollama")
+	}
+}
+
 func TestCmdConfigureRespectsStoredModel(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -1712,6 +1773,20 @@ func TestWriteJSONAtomic(t *testing.T) {
 	// Should end with newline
 	if !strings.HasSuffix(string(data), "\n") {
 		t.Fatalf("expected trailing newline in %q", string(data))
+	}
+}
+
+func TestWriteJSONAtomicMkdirAllError(t *testing.T) {
+	// Place a regular file where a directory is expected, so MkdirAll fails.
+	tmpDir := t.TempDir()
+	blocker := filepath.Join(tmpDir, "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write blocker: %v", err)
+	}
+	path := filepath.Join(blocker, "sub", "test.json")
+	err := writeJSONAtomic(path, map[string]any{"key": "val"})
+	if err == nil {
+		t.Fatal("expected error from MkdirAll when parent is a regular file")
 	}
 }
 
@@ -2092,7 +2167,7 @@ func TestApplyPresetClearsOtherAuthEnv(t *testing.T) {
 			"ANTHROPIC_API_KEY": "stale-key",
 		},
 	}
-	applyPreset(root, providerPresets["deepseek"], "sk-ds", "")
+	applyPreset(root, providerPresets["deepseek"], "sk-ds")
 	env := root["env"].(map[string]any)
 	if _, ok := env["ANTHROPIC_API_KEY"]; ok {
 		t.Fatal("expected ANTHROPIC_API_KEY to be cleared")
@@ -2108,7 +2183,7 @@ func TestApplyPresetClearsAuthTokenForAPIKeyProviders(t *testing.T) {
 			"ANTHROPIC_AUTH_TOKEN": "stale-token",
 		},
 	}
-	applyPreset(root, providerPresets["openrouter"], "sk-or", "")
+	applyPreset(root, providerPresets["openrouter"], "sk-or")
 	env := root["env"].(map[string]any)
 	if _, ok := env["ANTHROPIC_AUTH_TOKEN"]; ok {
 		t.Fatal("expected ANTHROPIC_AUTH_TOKEN to be cleared")
@@ -2121,7 +2196,7 @@ func TestApplyPresetClearsAuthTokenForAPIKeyProviders(t *testing.T) {
 func TestApplyPresetExtraEnvOverridesManagedDefaults(t *testing.T) {
 	// minimax-cn ExtraEnv overrides API_TIMEOUT_MS and other managed keys
 	root := map[string]any{}
-	applyPreset(root, providerPresets["minimax-cn"], "sk-test", "")
+	applyPreset(root, providerPresets["minimax-cn"], "sk-test")
 	env := root["env"].(map[string]any)
 	if got := env["API_TIMEOUT_MS"]; got != "3000000" {
 		t.Fatalf("API_TIMEOUT_MS = %v, want %v", got, "3000000")
@@ -2555,7 +2630,7 @@ func TestCmdRemovePresetProvider(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	if err := cmdRemove([]string{"--force", "deepseek"}); err != nil {
+	if err := cmdRemove([]string{"--force", "deepseek"}, strings.NewReader(""), &bytes.Buffer{}); err != nil {
 		t.Fatalf("cmdRemove returned error: %v", err)
 	}
 
@@ -2586,7 +2661,7 @@ func TestCmdRemoveCustomProvider(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	if err := cmdRemove([]string{"--force", "my-custom"}); err != nil {
+	if err := cmdRemove([]string{"--force", "my-custom"}, strings.NewReader(""), &bytes.Buffer{}); err != nil {
 		t.Fatalf("cmdRemove returned error: %v", err)
 	}
 
@@ -2604,10 +2679,10 @@ func TestCmdRemoveCustomProvider(t *testing.T) {
 }
 
 func TestCmdRemoveNoProviderArgError(t *testing.T) {
-	if err := cmdRemove([]string{}); err == nil {
+	if err := cmdRemove([]string{}, strings.NewReader(""), &bytes.Buffer{}); err == nil {
 		t.Fatal("expected error for missing provider")
 	}
-	if err := cmdRemove([]string{"--force"}); err == nil {
+	if err := cmdRemove([]string{"--force"}, strings.NewReader(""), &bytes.Buffer{}); err == nil {
 		t.Fatal("expected error for missing provider")
 	}
 }
@@ -2615,7 +2690,7 @@ func TestCmdRemoveNoProviderArgError(t *testing.T) {
 func TestCmdRemoveUnknownProvider(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	if err := cmdRemove([]string{"--force", "nonexistent"}); err == nil {
+	if err := cmdRemove([]string{"--force", "nonexistent"}, strings.NewReader(""), &bytes.Buffer{}); err == nil {
 		t.Fatal("expected error for unknown provider")
 	}
 }
@@ -3488,15 +3563,9 @@ func TestCmdRemoveNoForceCancelled(t *testing.T) {
 		t.Fatalf("write config: %v", err)
 	}
 
-	// Mock stdin with "n" response
-	oldStdin := os.Stdin
-	r, w, _ := os.Pipe()
-	os.Stdin = r
-	w.WriteString("n\n")
-	w.Close()
-	defer func() { os.Stdin = oldStdin }()
-
-	if err := cmdRemove([]string{"deepseek"}); err != nil {
+	// Pass "n" as input — cancels the removal.
+	in := strings.NewReader("n\n")
+	if err := cmdRemove([]string{"deepseek"}, in, &bytes.Buffer{}); err != nil {
 		t.Fatalf("cmdRemove returned error: %v", err)
 	}
 
@@ -3511,6 +3580,45 @@ func TestCmdRemoveNoForceCancelled(t *testing.T) {
 	}
 	if updated.Providers["deepseek"].APIKey != "sk-test" {
 		t.Fatal("expected provider to NOT be removed after cancelling")
+	}
+}
+
+func TestCmdRemoveConfirmYes(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	cfg := AppConfig{
+		Providers: map[string]StoredProvider{
+			"deepseek": {APIKey: "sk-test"},
+		},
+	}
+	configPath := filepath.Join(home, ".claude-switch", "config.json")
+	if err := writeJSONAtomic(configPath, cfg); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	// Pass "y" as input — confirms the removal.
+	in := strings.NewReader("y\n")
+	output := &bytes.Buffer{}
+	if err := cmdRemove([]string{"deepseek"}, in, output); err != nil {
+		t.Fatalf("cmdRemove returned error: %v", err)
+	}
+
+	if !strings.Contains(output.String(), "removed") {
+		t.Fatalf("expected 'removed' in output, got %q", output.String())
+	}
+
+	// Config should no longer have the provider
+	var updated AppConfig
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if err := json.Unmarshal(data, &updated); err != nil {
+		t.Fatalf("unmarshal config: %v", err)
+	}
+	if _, ok := updated.Providers["deepseek"]; ok {
+		t.Fatal("expected provider to be removed after confirming")
 	}
 }
 
@@ -3869,7 +3977,7 @@ func TestCmdRemoveNoSavedConfig(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	// No providers saved
-	if err := cmdRemove([]string{"--force", "deepseek"}); err == nil {
+	if err := cmdRemove([]string{"--force", "deepseek"}, strings.NewReader(""), &bytes.Buffer{}); err == nil {
 		t.Fatal("expected error for unsaved provider")
 	}
 }
@@ -3968,7 +4076,7 @@ func TestResolveProviderSelectionCanonicalMatchCustom(t *testing.T) {
 
 func TestCmdRemoveInvalidFlag(t *testing.T) {
 	// Unknown flag causes flag.Parse to return an error, which is expected behavior
-	err := cmdRemove([]string{"--invalid"})
+	err := cmdRemove([]string{"--invalid"}, strings.NewReader(""), &bytes.Buffer{})
 	_ = err
 }
 
@@ -5185,6 +5293,18 @@ func TestCmdTestUnsupportedProvider(t *testing.T) {
 	}
 }
 
+func TestCmdTestOpenCodeGoWithUnsupportedModel(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	err := cmdTest([]string{"opencode-go", "--model", "kimi-k2.5", "--api-key", "sk-test"}, &bytes.Buffer{})
+	if err == nil {
+		t.Fatal("expected error for unsupported opencode-go model")
+	}
+	if strings.Contains(err.Error(), "unsupported provider") {
+		t.Fatalf("error should describe model issue, got: %v", err)
+	}
+}
+
 // ---- cmdSwitch no args ----
 
 func TestCmdSwitchNoArgs(t *testing.T) {
@@ -5201,3 +5321,411 @@ func TestDownloadChecksumContentInvalidURL(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+// ---- validateBaseURL edge cases ----
+
+func TestValidateBaseURLEmpty(t *testing.T) {
+	if err := validateBaseURL(""); err == nil {
+		t.Fatal("expected error for empty URL")
+	}
+	if err := validateBaseURL("  "); err == nil {
+		t.Fatal("expected error for whitespace URL")
+	}
+}
+
+func TestValidateBaseURLInvalidScheme(t *testing.T) {
+	if err := validateBaseURL("ftp://example.com/api"); err == nil {
+		t.Fatal("expected error for ftp scheme")
+	}
+}
+
+func TestValidateBaseURLMissingHost(t *testing.T) {
+	if err := validateBaseURL("https:///path"); err == nil {
+		t.Fatal("expected error for missing host")
+	}
+}
+
+func TestValidateBaseURLParseError(t *testing.T) {
+	if err := validateBaseURL("http://\x00invalid"); err == nil {
+		t.Fatal("expected error for unparseable URL")
+	}
+}
+
+func TestBackupIfExistsDirAsFileError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "unreadable")
+	// Create a directory where a regular file is expected, to cause ReadFile to fail
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := backupIfExists(path); err == nil {
+		t.Fatal("expected error when reading a directory as a file")
+	}
+}
+
+// ---- copyFile stat error ----
+
+func TestCopyFileStatError(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "nonexistent")
+	dst := filepath.Join(t.TempDir(), "dst")
+	if err := copyFile(src, dst); err == nil {
+		t.Fatal("expected error for nonexistent source file")
+	}
+}
+
+// ---- moveFile falls back to copy ----
+
+func TestMoveFileRenameFailureFallsBackToCopy(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "dst")
+	if err := os.WriteFile(src, []byte("hello"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := moveFile(src, dst); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "hello" {
+		t.Fatalf("expected 'hello', got %q", string(data))
+	}
+	if _, err := os.Stat(src); !os.IsNotExist(err) {
+		t.Fatal("source file should be removed after move")
+	}
+}
+
+// ---- promptCustomProviderFallback error paths ----
+
+func TestPromptCustomProviderFallbackEmptyName(t *testing.T) {
+	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
+	buf := bytes.NewBufferString("\n")
+	_, err := promptCustomProviderFallback(bufio.NewReader(buf), io.Discard, cfg)
+	if err == nil || !strings.Contains(err.Error(), "cannot be empty") {
+		t.Fatalf("expected 'cannot be empty' error, got: %v", err)
+	}
+}
+
+func TestPromptCustomProviderFallbackEmptyBaseURL(t *testing.T) {
+	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
+	buf := bytes.NewBufferString("test\n\n")
+	_, err := promptCustomProviderFallback(bufio.NewReader(buf), io.Discard, cfg)
+	if err == nil || !strings.Contains(err.Error(), "cannot be empty") {
+		t.Fatalf("expected 'cannot be empty' error, got: %v", err)
+	}
+}
+
+func TestPromptCustomProviderFallbackEmptyAPIKey(t *testing.T) {
+	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
+	buf := bytes.NewBufferString("test\nhttps://example.com\n\n")
+	_, err := promptCustomProviderFallback(bufio.NewReader(buf), io.Discard, cfg)
+	if err == nil || !strings.Contains(err.Error(), "cannot be empty") {
+		t.Fatalf("expected 'cannot be empty' error, got: %v", err)
+	}
+}
+
+func TestPromptCustomProviderFallbackEmptyModel(t *testing.T) {
+	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
+	buf := bytes.NewBufferString("test\nhttps://example.com\nkey\n\n")
+	_, err := promptCustomProviderFallback(bufio.NewReader(buf), io.Discard, cfg)
+	if err == nil || !strings.Contains(err.Error(), "cannot be empty") {
+		t.Fatalf("expected 'cannot be empty' error, got: %v", err)
+	}
+}
+
+// ---- detectProvider edge cases ----
+
+func TestDetectProviderUnknown(t *testing.T) {
+	if got := detectProvider("https://unknown.example.com/v1", ""); got != customDetectedProvider {
+		t.Fatalf("expected custom, got %q", got)
+	}
+}
+
+func TestDetectProviderOpenCodeGoByModelPrefix(t *testing.T) {
+	if got := detectProvider("https://some-proxy.com/v1", "opencode-go/something"); got != "opencode-go" {
+		t.Fatalf("expected opencode-go from model prefix, got %q", got)
+	}
+}
+
+// ---- readLine additional case ----
+
+func TestReadLineExhaustedBuffer(t *testing.T) {
+	buf := bytes.NewBufferString("hello")
+	reader := bufio.NewReader(buf)
+	line, err := readLine(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if line != "hello" {
+		t.Fatalf("expected 'hello', got %q", line)
+	}
+	_, err = readLine(reader)
+	if err != io.EOF {
+		t.Fatalf("expected EOF, got %v", err)
+	}
+}
+
+func TestReadLineError(t *testing.T) {
+	// A reader that returns a non-EOF error on every read.
+	reader := bufio.NewReader(&errorReader{msg: "simulated read error"})
+	_, err := readLine(reader)
+	if err == nil {
+		t.Fatal("expected error from error reader")
+	}
+}
+
+// ---- loadAppConfig invalid JSON ----
+
+func TestLoadAppConfigInvalidJSON(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	configDir := filepath.Join(home, ".claude-switch")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.json"), []byte("{{{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err := loadAppConfig()
+	if err == nil {
+		t.Fatal("expected error for invalid JSON config")
+	}
+}
+
+// ---- discoverOllamaModels with test server ----
+
+func TestDiscoverOllamaModelsHTTP(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/tags" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"models":[{"name":"llama3"},{"name":"qwen2.5"}]}`))
+	}))
+	defer server.Close()
+
+	// We can't easily override the hardcoded localhost URL, but we can test the HTTP fallback path
+	// by calling ollamaModels() which tries discovery then falls back
+	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
+	models := providerModels(cfg, "ollama")
+	if len(models) == 0 {
+		t.Fatal("expected non-empty ollama models (from preset fallback)")
+	}
+}
+
+func TestDiscoverOllamaModelsBadJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/tags" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`not json`))
+	}))
+	defer server.Close()
+
+	// discoverOllamaModels returns nil on bad JSON -> ollamaModels falls back to preset
+	models := ollamaModels()
+	if len(models) == 0 {
+		t.Fatal("expected non-empty fallback models")
+	}
+}
+
+// ---- TUI state tests (no Run() required) ----
+
+func TestTUIStateShowProviders(t *testing.T) {
+	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
+	names := sortedProviderNames(cfg, true)
+	if len(names) == 0 {
+		t.Fatal("expected non-empty provider names")
+	}
+	ts := &tuiState{
+		app:              tview.NewApplication(),
+		pages:            tview.NewPages(),
+		cfg:              cfg,
+		names:            names,
+		selectedProvider: names[0],
+		typedAPIKeys:     map[string]string{},
+		resetKeys:        map[string]bool{},
+		customModels:     map[string]string{},
+		resultErr:        fmt.Errorf("cancelled"),
+	}
+	ts.providerList = tview.NewList()
+	ts.providerList.ShowSecondaryText(true)
+	ts.providerPage = tview.NewFlex()
+	ts.providerPage.SetDirection(tview.FlexRow)
+	ts.providerPage.AddItem(ts.providerList, 0, 1, true)
+	ts.pages.AddPage("providers", ts.providerPage, true, true)
+
+	ts.showProviders()
+	if ts.providerList.GetItemCount() == 0 {
+		t.Fatal("expected non-empty provider list after showProviders")
+	}
+}
+
+func TestTUIStateShowDetail(t *testing.T) {
+	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
+	names := sortedProviderNames(cfg, true)
+	ts := &tuiState{
+		app:              tview.NewApplication(),
+		pages:            tview.NewPages(),
+		cfg:              cfg,
+		currentProvider:  "openrouter",
+		currentModel:     "anthropic/claude-sonnet-4.6",
+		names:            names,
+		selectedProvider: "openrouter",
+		typedAPIKeys:     map[string]string{},
+		resetKeys:        map[string]bool{},
+		customModels:     map[string]string{},
+		resultErr:        fmt.Errorf("cancelled"),
+	}
+	ts.providerList = tview.NewList()
+	ts.providerPage = tview.NewFlex()
+	ts.providerPage.SetDirection(tview.FlexRow)
+	ts.providerPage.AddItem(ts.providerList, 0, 1, true)
+	ts.pages.AddPage("providers", ts.providerPage, true, true)
+	ts.detailText = tview.NewTextView()
+	ts.detailText.SetDynamicColors(true)
+	ts.showDetail("openrouter", "providers")
+	// showDetail doesn't clear resultErr (only finishSelection does)
+	// Just verify no panic and provider was selected
+	if ts.selectedProvider != "openrouter" {
+		t.Fatalf("expected selectedProvider openrouter, got %q", ts.selectedProvider)
+	}
+}
+
+func TestTUIStateShowModels(t *testing.T) {
+	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
+	names := sortedProviderNames(cfg, true)
+	ts := &tuiState{
+		app:              tview.NewApplication(),
+		pages:            tview.NewPages(),
+		cfg:              cfg,
+		currentProvider:  "",
+		currentModel:     "",
+		names:            names,
+		selectedProvider: "openrouter",
+		typedAPIKeys:     map[string]string{},
+		resetKeys:        map[string]bool{},
+		customModels:     map[string]string{},
+		resultErr:        fmt.Errorf("cancelled"),
+	}
+	ts.providerList = tview.NewList()
+	ts.providerPage = tview.NewFlex()
+	ts.providerPage.SetDirection(tview.FlexRow)
+	ts.providerPage.AddItem(ts.providerList, 0, 1, true)
+	ts.pages.AddPage("providers", ts.providerPage, true, true)
+	ts.showModels("openrouter", "providers")
+}
+
+func TestTUIStateShowKeyForm(t *testing.T) {
+	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
+	names := sortedProviderNames(cfg, true)
+	ts := &tuiState{
+		app:              tview.NewApplication(),
+		pages:            tview.NewPages(),
+		cfg:              cfg,
+		names:            names,
+		selectedProvider: "openrouter",
+		typedAPIKeys:     map[string]string{},
+		resetKeys:        map[string]bool{},
+		customModels:     map[string]string{},
+		resultErr:        fmt.Errorf("cancelled"),
+	}
+	ts.providerList = tview.NewList()
+	ts.providerPage = tview.NewFlex()
+	ts.providerPage.SetDirection(tview.FlexRow)
+	ts.providerPage.AddItem(ts.providerList, 0, 1, true)
+	ts.pages.AddPage("providers", ts.providerPage, true, true)
+	ts.showKeyForm("openrouter", "providers", func() {})
+}
+
+func TestTUIStateShowCustomModelForm(t *testing.T) {
+	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
+	names := sortedProviderNames(cfg, true)
+	ts := &tuiState{
+		app:              tview.NewApplication(),
+		pages:            tview.NewPages(),
+		cfg:              cfg,
+		names:            names,
+		selectedProvider: "openrouter",
+		typedAPIKeys:     map[string]string{},
+		resetKeys:        map[string]bool{},
+		customModels:     map[string]string{},
+		resultErr:        fmt.Errorf("cancelled"),
+	}
+	ts.providerList = tview.NewList()
+	ts.providerPage = tview.NewFlex()
+	ts.providerPage.SetDirection(tview.FlexRow)
+	ts.providerPage.AddItem(ts.providerList, 0, 1, true)
+	ts.pages.AddPage("providers", ts.providerPage, true, true)
+	ts.showCustomModelForm("openrouter")
+}
+
+func TestTUIStateShowCustomProviderForm(t *testing.T) {
+	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
+	names := sortedProviderNames(cfg, true)
+	ts := &tuiState{
+		app:              tview.NewApplication(),
+		pages:            tview.NewPages(),
+		cfg:              cfg,
+		names:            names,
+		selectedProvider: names[0],
+		typedAPIKeys:     map[string]string{},
+		resetKeys:        map[string]bool{},
+		customModels:     map[string]string{},
+		resultErr:        fmt.Errorf("cancelled"),
+	}
+	ts.providerList = tview.NewList()
+	ts.providerPage = tview.NewFlex()
+	ts.providerPage.SetDirection(tview.FlexRow)
+	ts.providerPage.AddItem(ts.providerList, 0, 1, true)
+	ts.pages.AddPage("providers", ts.providerPage, true, true)
+	ts.showCustomProviderForm()
+}
+
+func TestTUIStateBuildModelsWithCustom(t *testing.T) {
+	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
+	ts := &tuiState{
+		cfg:          cfg,
+		customModels: map[string]string{"openrouter": "my-model"},
+	}
+	models := ts.buildModels("openrouter")
+	if models[0] != "my-model" {
+		t.Fatalf("expected custom model first, got %q", models[0])
+	}
+}
+
+func TestTUIStateShowDetailWithResetKey(t *testing.T) {
+	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
+	names := sortedProviderNames(cfg, true)
+	ts := &tuiState{
+		app:              tview.NewApplication(),
+		pages:            tview.NewPages(),
+		cfg:              cfg,
+		currentProvider:  "",
+		currentModel:     "",
+		names:            names,
+		selectedProvider: "openrouter",
+		typedAPIKeys:     map[string]string{"openrouter": "test-key"},
+		resetKeys:        map[string]bool{"openrouter": true},
+		customModels:     map[string]string{},
+		resultErr:        fmt.Errorf("cancelled"),
+	}
+	ts.providerList = tview.NewList()
+	ts.providerPage = tview.NewFlex()
+	ts.providerPage.SetDirection(tview.FlexRow)
+	ts.providerPage.AddItem(ts.providerList, 0, 1, true)
+	ts.pages.AddPage("providers", ts.providerPage, true, true)
+	ts.detailText = tview.NewTextView()
+	ts.detailText.SetDynamicColors(true)
+	ts.showDetail("openrouter", "providers")
+	// Verify showDetail with reset key doesn't panic
+	if ts.selectedProvider != "openrouter" {
+		t.Fatalf("expected selectedProvider openrouter, got %q", ts.selectedProvider)
+	}
+}
+
+

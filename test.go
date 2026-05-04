@@ -35,7 +35,7 @@ func cmdTest(args []string, out io.Writer) error {
 
 	preset, err := resolveSwitchPreset(pa.Provider, cfg, pa.Model)
 	if err != nil {
-		return fmt.Errorf("unsupported provider %q", providerArg)
+		return err
 	}
 
 	return testProvider(out, preset, pa.APIKey, strings.TrimSpace(*testPath))

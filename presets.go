@@ -77,6 +77,7 @@ type ProviderPreset struct {
 	ExtraEnv           map[string]any
 	Website            string
 	APIKeyURL          string
+	NoAPIKey           bool
 }
 
 type StoredProvider struct {
@@ -199,6 +200,7 @@ var providerPresets = map[string]ProviderPreset{
 		Subagent:  "qwen2.5-coder:7b",
 		Website:   "https://ollama.com",
 		APIKeyURL: "https://ollama.com",
+		NoAPIKey:  true,
 		ExtraEnv: map[string]any{
 			"API_TIMEOUT_MS":                          "600000",
 			"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",

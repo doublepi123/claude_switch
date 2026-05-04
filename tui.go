@@ -46,9 +46,15 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 	}
 	provider := selection.Provider
 
+	preset, _ := resolveProviderPreset(provider, cfg)
+
 	existingKey := strings.TrimSpace(cfg.Providers[provider].APIKey)
 	apiKey := existingKey
-	if selection.APIKey != "" {
+	if preset.NoAPIKey {
+		if apiKey == "" {
+			apiKey = provider
+		}
+	} else if selection.APIKey != "" {
 		apiKey = selection.APIKey
 	} else if apiKey == "" || *resetKey || selection.ResetKey {
 		apiKey, err = promptAPIKey(reader, out, provider)
@@ -144,7 +150,9 @@ func (ts *tuiState) rebuildProviderList() {
 		if name == ts.currentProvider {
 			suffix = append(suffix, "current")
 		}
-		if strings.TrimSpace(ts.cfg.Providers[name].APIKey) != "" {
+		if preset.NoAPIKey {
+			suffix = append(suffix, "no key needed")
+		} else if strings.TrimSpace(ts.cfg.Providers[name].APIKey) != "" {
 			suffix = append(suffix, "saved")
 		}
 		title := providerTitle(name, ts.cfg)
@@ -170,12 +178,18 @@ func (ts *tuiState) showDetail(provider, backPage string) {
 	fmt.Fprintf(&b, "[::b]Provider[::-]  %s\n", providerTitle(provider, ts.cfg))
 	fmt.Fprintf(&b, "[::b]Preset[::-]    %s\n", preset.Name)
 	fmt.Fprintf(&b, "[::b]Base URL[::-]  %s\n", preset.BaseURL)
-	fmt.Fprintf(&b, "[::b]Saved Key[::-] %s\n", maskAPIKey(ts.cfg.Providers[provider].APIKey))
+	if preset.NoAPIKey {
+		fmt.Fprintf(&b, "[::b]API Key[::-]   [green]Not required[-]\n")
+	} else {
+		fmt.Fprintf(&b, "[::b]Saved Key[::-] %s\n", maskAPIKey(ts.cfg.Providers[provider].APIKey))
+	}
 	fmt.Fprintf(&b, "[::b]Active[::-]    %s / %s\n", currentProviderLabel(ts.currentProvider), currentModelLabel(ts.currentModel))
-	if ts.resetKeys[provider] {
-		fmt.Fprintf(&b, "[yellow]Pending key update on apply[-]\n")
-	} else if !hasSavedKey {
-		fmt.Fprintf(&b, "[yellow]No saved key yet[-]\n")
+	if !preset.NoAPIKey {
+		if ts.resetKeys[provider] {
+			fmt.Fprintf(&b, "[yellow]Pending key update on apply[-]\n")
+		} else if !hasSavedKey {
+			fmt.Fprintf(&b, "[yellow]No saved key yet[-]\n")
+		}
 	}
 	ts.detailText.SetText(b.String())
 
@@ -186,11 +200,13 @@ func (ts *tuiState) showDetail(provider, backPage string) {
 	actions.AddItem("Choose Model", "", 'm', func() {
 		ts.showModels(provider, "detail")
 	})
-	actions.AddItem("Edit API Key", "", 'k', func() {
-		ts.showKeyForm(provider, backPage, func() {
-			ts.showDetail(provider, backPage)
+	if !preset.NoAPIKey {
+		actions.AddItem("Edit API Key", "", 'k', func() {
+			ts.showKeyForm(provider, backPage, func() {
+				ts.showDetail(provider, backPage)
+			})
 		})
-	})
+	}
 	actions.AddItem("Back", "", 'b', ts.showProviders)
 	actions.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
 		switch {
@@ -200,7 +216,7 @@ func (ts *tuiState) showDetail(provider, backPage string) {
 		case event.Rune() == 'q' || event.Rune() == 'Q':
 			ts.showProviders()
 			return nil
-		case event.Rune() == 'k' || event.Rune() == 'K':
+		case !preset.NoAPIKey && (event.Rune() == 'k' || event.Rune() == 'K'):
 			ts.showKeyForm(provider, backPage, func() {
 				ts.showDetail(provider, backPage)
 			})
@@ -231,7 +247,8 @@ func (ts *tuiState) showModels(provider, backPage string) {
 		}
 		modelName := model
 		modelList.AddItem(label, "", 0, func() {
-			if !hasConfigurableKey(strings.TrimSpace(ts.cfg.Providers[provider].APIKey), ts.typedAPIKeys[provider], ts.resetKeys[provider]) {
+			preset, _ := resolveProviderPreset(provider, ts.cfg)
+			if !preset.NoAPIKey && !hasConfigurableKey(strings.TrimSpace(ts.cfg.Providers[provider].APIKey), ts.typedAPIKeys[provider], ts.resetKeys[provider]) {
 				ts.showKeyForm(provider, backPage, func() {
 					ts.showModels(provider, backPage)
 				})

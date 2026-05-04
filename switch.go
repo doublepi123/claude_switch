@@ -23,15 +23,19 @@ func resolveProviderAndKey(providerArg, apiKeyFlag, model string) (*providerArgs
 	if err != nil {
 		return nil, nil, err
 	}
-	if _, err := resolveProviderPreset(provider, cfg); err != nil {
+	preset, err := resolveProviderPreset(provider, cfg)
+	if err != nil {
 		return nil, nil, fmt.Errorf("unsupported provider %q", providerArg)
 	}
 	key := strings.TrimSpace(apiKeyFlag)
 	if key == "" {
 		key = strings.TrimSpace(cfg.Providers[provider].APIKey)
 	}
-	if key == "" {
+	if key == "" && !preset.NoAPIKey {
 		return nil, nil, fmt.Errorf("missing api key for %s, run `cs set-key %s <api-key>` or pass --api-key", provider, provider)
+	}
+	if key == "" {
+		key = provider
 	}
 	return &providerArgs{
 		Provider: provider,
@@ -117,7 +121,7 @@ func switchProvider(provider string, cfg *AppConfig, apiKey, modelOverride, clau
 		return err
 	}
 
-	applyPreset(root, preset, apiKey, "")
+	applyPreset(root, preset, apiKey)
 	if err := writeJSONAtomic(settingsPath, root); err != nil {
 		return err
 	}
@@ -129,13 +133,12 @@ func switchProvider(provider string, cfg *AppConfig, apiKey, modelOverride, clau
 	return nil
 }
 
-func applyPreset(root map[string]any, preset ProviderPreset, apiKey, overrideModel string) {
+func applyPreset(root map[string]any, preset ProviderPreset, apiKey string) {
 	env := ensureNestedMap(root, "env")
 	for _, key := range managedEnvKeys {
 		delete(env, key)
 	}
 
-	preset = withSelectedModel(preset, overrideModel)
 	env["ANTHROPIC_BASE_URL"] = preset.BaseURL
 	authEnv := strings.TrimSpace(preset.AuthEnv)
 	if authEnv == "" {
