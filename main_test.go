@@ -426,6 +426,27 @@ func TestApplyPresetDeepSeekUsesAuthTokenAndExtraEnv(t *testing.T) {
 	}
 }
 
+func TestApplyPresetOllamaUsesAuthToken(t *testing.T) {
+	root := map[string]any{
+		"env": map[string]any{
+			"ANTHROPIC_API_KEY": "stale-api-key",
+		},
+	}
+
+	applyPreset(root, providerPresets["ollama"], "ollama")
+
+	env := root["env"].(map[string]any)
+	if _, ok := env["ANTHROPIC_API_KEY"]; ok {
+		t.Fatalf("expected ANTHROPIC_API_KEY to be unset for ollama")
+	}
+	if got := env["ANTHROPIC_AUTH_TOKEN"]; got != "ollama" {
+		t.Fatalf("auth token = %v, want %v", got, "ollama")
+	}
+	if got := env["ANTHROPIC_BASE_URL"]; got != "http://localhost:11434" {
+		t.Fatalf("base url = %v, want %v", got, "http://localhost:11434")
+	}
+}
+
 func TestApplyPresetDeepSeekCustomModelOverridesAllModels(t *testing.T) {
 	root := map[string]any{}
 	preset := withSelectedModel(providerPresets["deepseek"], "deepseek-custom")
@@ -645,6 +666,7 @@ func TestDetectProvider(t *testing.T) {
 		{baseURL: "https://gateway.openrouter.ai/api", want: "openrouter"},
 		{baseURL: "https://example.com", want: "custom"},
 		{baseURL: "http://localhost:11434/v1", want: "ollama"},
+		{baseURL: "http://localhost:11434", want: "ollama"},
 		{baseURL: "http://127.0.0.1:11434/v1", want: "ollama"},
 		{baseURL: "http://[::1]:11434/v1", want: "ollama"},
 	}
@@ -1585,11 +1607,11 @@ func TestCmdSwitchOllamaNoAPIKey(t *testing.T) {
 		t.Fatalf("unmarshal settings: %v", err)
 	}
 	env := settings["env"].(map[string]any)
-	if got := env["ANTHROPIC_API_KEY"]; got != "ollama" {
-		t.Fatalf("api key = %v, want %v", got, "ollama")
+	if got := env["ANTHROPIC_AUTH_TOKEN"]; got != "ollama" {
+		t.Fatalf("auth token = %v, want %v", got, "ollama")
 	}
-	if got := env["ANTHROPIC_BASE_URL"]; got != "http://localhost:11434/v1" {
-		t.Fatalf("base url = %v, want %v", got, "http://localhost:11434/v1")
+	if got := env["ANTHROPIC_BASE_URL"]; got != "http://localhost:11434" {
+		t.Fatalf("base url = %v, want %v", got, "http://localhost:11434")
 	}
 }
 
