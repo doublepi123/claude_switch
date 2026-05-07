@@ -53,6 +53,8 @@ func runWithIO(args []string, in io.Reader, out io.Writer) error {
 		return cmdSetKey(args[1:])
 	case "switch":
 		return cmdSwitch(args[1:])
+	case "restore":
+		return cmdRestore(args[1:], out)
 	case "upgrade":
 		return cmdUpgrade(args[1:], out)
 	case "test":
@@ -70,7 +72,7 @@ func runWithIO(args []string, in io.Reader, out io.Writer) error {
 }
 
 func printVersion(out io.Writer) {
-	fmt.Fprintf(out, "claude-switch %s\n", version)
+	fmt.Fprintf(out, "code-switch %s\n", version)
 }
 
 func isVersionRequest(args []string) bool {
@@ -79,7 +81,7 @@ func isVersionRequest(args []string) bool {
 	}
 	if len(args) == 2 && args[1] == "--version" {
 		switch args[0] {
-		case "list", "configure", "current", "set-key", "switch", "upgrade", "help", "test", "remove", "completion":
+		case "list", "configure", "current", "set-key", "switch", "restore", "upgrade", "help", "test", "remove", "completion":
 			return true
 		}
 	}
@@ -89,8 +91,13 @@ func isVersionRequest(args []string) bool {
 func cmdList(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("list", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
+	agentFlag := fs.String("agent", string(agentClaude), "target agent: claude or codex")
 	verbose := fs.Bool("verbose", false, "show all available models for each provider")
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	agent, err := parseAgentName(*agentFlag)
+	if err != nil {
 		return err
 	}
 
@@ -98,9 +105,9 @@ func cmdList(args []string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	names := sortedProviderNames(cfg, false)
+	names := providerNamesForAgent(agent, cfg, false, false)
 	for _, name := range names {
-		preset, err := resolveProviderPreset(name, cfg)
+		preset, err := resolveAgentProviderPreset(agent, name, cfg)
 		if err != nil {
 			return err
 		}
@@ -116,9 +123,34 @@ func cmdList(args []string, out io.Writer) error {
 func cmdCurrent(args []string, out io.Writer) error {
 	fs := flag.NewFlagSet("current", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
+	agentFlag := fs.String("agent", string(agentClaude), "target agent: claude or codex")
 	claudeDir := fs.String("claude-dir", "", "override Claude config dir")
+	codexDir := fs.String("codex-dir", "", "override Codex config dir")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	agent, err := parseAgentName(*agentFlag)
+	if err != nil {
+		return err
+	}
+	if agent == agentCodex {
+		configPath, provider, model, baseURL, err := currentCodexProvider(*codexDir)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(out, "config: %s\n", configPath)
+		if provider == "" {
+			fmt.Fprintln(out, "provider: unknown")
+			return nil
+		}
+		fmt.Fprintf(out, "provider: %s\n", provider)
+		if baseURL != "" {
+			fmt.Fprintf(out, "base_url: %s\n", baseURL)
+		}
+		if model != "" {
+			fmt.Fprintf(out, "model: %s\n", model)
+		}
+		return nil
 	}
 
 	settingsPath := claudeSettingsPath(*claudeDir)
@@ -147,7 +179,7 @@ func cmdCurrent(args []string, out io.Writer) error {
 
 func cmdSetKey(args []string) error {
 	if len(args) != 2 {
-		return fmt.Errorf("usage: claude-switch set-key <provider> <api-key>")
+		return fmt.Errorf("usage: code-switch set-key <provider> <api-key>")
 	}
 	cfg, path, err := loadAppConfig()
 	if err != nil {
@@ -174,7 +206,7 @@ func cmdSetKey(args []string) error {
 
 func cmdRemove(args []string, in io.Reader, out io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: claude-switch remove <provider> [--force]")
+		return fmt.Errorf("usage: code-switch remove <provider> [--force]")
 	}
 
 	flags := flag.NewFlagSet("remove", flag.ContinueOnError)
@@ -186,7 +218,7 @@ func cmdRemove(args []string, in io.Reader, out io.Writer) error {
 
 	providerArg := strings.TrimSpace(flags.Arg(0))
 	if providerArg == "" {
-		return fmt.Errorf("usage: claude-switch remove <provider> [--force]")
+		return fmt.Errorf("usage: code-switch remove <provider> [--force]")
 	}
 
 	provider := canonicalProviderName(providerArg)
@@ -221,7 +253,7 @@ func cmdRemove(args []string, in io.Reader, out io.Writer) error {
 
 func cmdCompletion(args []string, out io.Writer) error {
 	if len(args) == 0 {
-		return fmt.Errorf("usage: claude-switch completion bash|zsh|fish")
+		return fmt.Errorf("usage: code-switch completion bash|zsh|fish")
 	}
 	shell := strings.ToLower(strings.TrimSpace(args[0]))
 	switch shell {
@@ -238,7 +270,7 @@ func cmdCompletion(args []string, out io.Writer) error {
 }
 
 func bashCompletionString() string {
-	return fmt.Sprintf(`# claude-switch bash completion
+	return fmt.Sprintf(`# code-switch bash completion
 _cs() {
 	local cur prev words cword
 	_init_completion || return
@@ -246,7 +278,7 @@ _cs() {
 
 	case $cword in
 	1)
-		COMPREPLY=($(compgen -W "list configure current set-key switch test remove upgrade completion help --version --help" -- "$cur"))
+		COMPREPLY=($(compgen -W "list configure current set-key switch restore test remove upgrade completion help --version --help" -- "$cur"))
 		;;
 	2)
 		case ${words[1]} in
@@ -266,7 +298,7 @@ complete -F _cs cs
 
 func zshCompletionString() string {
 	var b strings.Builder
-	b.WriteString("#compdef cs\n\n_cs() {\n\tlocal -a commands\n\tcommands=(\n\t\t'list:list available providers'\n\t\t'configure:interactive TUI configuration'\n\t\t'current:show current provider'\n\t\t'set-key:save API key for a provider'\n\t\t'switch:switch Claude Code provider'\n\t\t'test:test provider API connectivity'\n\t\t'remove:remove saved provider config'\n\t\t'upgrade:upgrade to latest release'\n\t\t'completion:generate shell completion'\n\t\t'help:show help'\n\t)\n\n\tlocal -a providers\n\tproviders=(\n")
+	b.WriteString("#compdef cs\n\n_cs() {\n\tlocal -a commands\n\tcommands=(\n\t\t'list:list available providers'\n\t\t'configure:interactive TUI configuration'\n\t\t'current:show current provider'\n\t\t'set-key:save API key for a provider'\n\t\t'switch:switch agent provider'\n\t\t'restore:restore official agent config'\n\t\t'test:test provider API connectivity'\n\t\t'remove:remove saved provider config'\n\t\t'upgrade:upgrade to latest release'\n\t\t'completion:generate shell completion'\n\t\t'help:show help'\n\t)\n\n\tlocal -a providers\n\tproviders=(\n")
 	for _, name := range sortedPresetNames() {
 		fmt.Fprintf(&b, "\t\t'%s'\n", name)
 	}
@@ -275,14 +307,15 @@ func zshCompletionString() string {
 }
 
 func fishCompletionString() string {
-	return fmt.Sprintf(`# claude-switch fish completion
+	return fmt.Sprintf(`# code-switch fish completion
 complete -c cs -f
 
 complete -c cs -n '__fish_use_subcommand' -a 'list' -d 'List available providers'
 complete -c cs -n '__fish_use_subcommand' -a 'configure' -d 'Interactive TUI configuration'
 complete -c cs -n '__fish_use_subcommand' -a 'current' -d 'Show current provider'
 complete -c cs -n '__fish_use_subcommand' -a 'set-key' -d 'Save API key for a provider'
-complete -c cs -n '__fish_use_subcommand' -a 'switch' -d 'Switch Claude Code provider'
+complete -c cs -n '__fish_use_subcommand' -a 'switch' -d 'Switch agent provider'
+complete -c cs -n '__fish_use_subcommand' -a 'restore' -d 'Restore official agent config'
 complete -c cs -n '__fish_use_subcommand' -a 'test' -d 'Test provider API connectivity'
 complete -c cs -n '__fish_use_subcommand' -a 'remove' -d 'Remove saved provider config'
 complete -c cs -n '__fish_use_subcommand' -a 'upgrade' -d 'Upgrade to latest release'
@@ -311,10 +344,11 @@ func sortedPresetNames() []string {
 }
 
 func printUsage(out io.Writer) {
-	fmt.Fprint(out, "claude-switch\n\nUsage:\n  cs --version\n  cs list [--verbose]\n  cs [--dry-run] [--reset-key]         # interactive TUI\n  cs current [--claude-dir DIR]\n  cs set-key <provider> <api-key>\n  cs switch <provider> [--api-key sk-xxx] [--model model-id] [--claude-dir DIR] [--dry-run]\n  cs test <provider> [--api-key sk-xxx] [--model model-id] [--path /custom/api/path]\n  cs remove <provider> [--force]\n  cs upgrade [--dry-run] [--tag vX.Y.Z]\n  cs completion bash|zsh|fish\n\nProviders:\n")
+	fmt.Fprint(out, "code-switch\n\nUsage:\n  cs --version\n  cs list [--agent claude|codex] [--verbose]\n  cs [--dry-run] [--reset-key]         # interactive TUI\n  cs configure [--agent claude|codex] [--dry-run] [--reset-key]\n  cs current [--agent claude|codex] [--claude-dir DIR] [--codex-dir DIR]\n  cs set-key <provider> <api-key>\n  cs switch <provider> [--agent claude|codex] [--api-key sk-xxx] [--model model-id] [--claude-dir DIR] [--codex-dir DIR] [--dry-run]\n  cs restore [--agent claude|codex] [--dry-run]\n  cs test <provider> [--agent claude|codex] [--api-key sk-xxx] [--model model-id] [--path /custom/api/path]\n  cs remove <provider> [--force]\n  cs upgrade [--dry-run] [--tag vX.Y.Z]\n  cs completion bash|zsh|fish\n\nClaude providers:\n")
 	for _, name := range sortedPresetNames() {
 		fmt.Fprintf(out, "  %s\n", name)
 	}
+	fmt.Fprint(out, "\nCodex providers:\n  ollama-cloud\n")
 }
 
 func makeCustomProviderKey(name string) string {

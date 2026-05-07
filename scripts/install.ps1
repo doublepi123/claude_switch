@@ -1,5 +1,5 @@
 param(
-    [string]$InstallDir = "$HOME\AppData\Local\Programs\claude-switch\bin"
+    [string]$InstallDir = "$HOME\AppData\Local\Programs\code-switch\bin"
 )
 
 $ErrorActionPreference = 'Stop'
@@ -22,7 +22,7 @@ if ($version -eq 'dev' -and (Get-Command git -ErrorAction SilentlyContinue)) {
     }
 }
 
-Write-Host "Building claude-switch..."
+Write-Host "Building code-switch..."
 $env:GOCACHE = if ($env:GOCACHE) { $env:GOCACHE } else { Join-Path $repoRoot '.gocache' }
 go build -ldflags "-X main.version=$version" -o $binaryPath $repoRoot
 

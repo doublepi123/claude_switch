@@ -37,7 +37,7 @@ func TestRunVersion(t *testing.T) {
 		t.Fatalf("runWithIO(--version) returned error: %v", err)
 	}
 
-	if got, want := output.String(), "claude-switch v-test\n"; got != want {
+	if got, want := output.String(), "code-switch v-test\n"; got != want {
 		t.Fatalf("version output = %q, want %q", got, want)
 	}
 }
@@ -54,7 +54,7 @@ func TestRunSubcommandVersionFlag(t *testing.T) {
 		t.Fatalf("runWithIO(switch --version) returned error: %v", err)
 	}
 
-	if got, want := output.String(), "claude-switch v-test\n"; got != want {
+	if got, want := output.String(), "code-switch v-test\n"; got != want {
 		t.Fatalf("version output = %q, want %q", got, want)
 	}
 }
@@ -74,7 +74,7 @@ func TestRunSwitchProviderNamedVersionIsNotVersionRequest(t *testing.T) {
 			},
 		},
 	}
-	if err := writeJSONAtomic(filepath.Join(home, ".claude-switch", "config.json"), cfg); err != nil {
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
@@ -82,7 +82,7 @@ func TestRunSwitchProviderNamedVersionIsNotVersionRequest(t *testing.T) {
 	if err := runWithIO([]string{"switch", "version", "--claude-dir", claudeDir}, strings.NewReader(""), output); err != nil {
 		t.Fatalf("runWithIO(switch version) returned error: %v", err)
 	}
-	if strings.Contains(output.String(), "claude-switch") {
+	if strings.Contains(output.String(), "code-switch") {
 		t.Fatalf("did not expect version output, got %q", output.String())
 	}
 
@@ -115,12 +115,12 @@ func TestUpgradeAssetName(t *testing.T) {
 		goarch string
 		want   string
 	}{
-		{goos: "darwin", goarch: "amd64", want: "claude-switch-darwin-amd64.tar.gz"},
-		{goos: "darwin", goarch: "arm64", want: "claude-switch-darwin-arm64.tar.gz"},
-		{goos: "linux", goarch: "amd64", want: "claude-switch-linux-amd64.tar.gz"},
-		{goos: "linux", goarch: "arm64", want: "claude-switch-linux-arm64.tar.gz"},
-		{goos: "windows", goarch: "amd64", want: "claude-switch-windows-amd64.zip"},
-		{goos: "windows", goarch: "arm64", want: "claude-switch-windows-arm64.zip"},
+		{goos: "darwin", goarch: "amd64", want: "code-switch-darwin-amd64.tar.gz"},
+		{goos: "darwin", goarch: "arm64", want: "code-switch-darwin-arm64.tar.gz"},
+		{goos: "linux", goarch: "amd64", want: "code-switch-linux-amd64.tar.gz"},
+		{goos: "linux", goarch: "arm64", want: "code-switch-linux-arm64.tar.gz"},
+		{goos: "windows", goarch: "amd64", want: "code-switch-windows-amd64.zip"},
+		{goos: "windows", goarch: "arm64", want: "code-switch-windows-arm64.zip"},
 	}
 
 	for _, tc := range cases {
@@ -205,7 +205,7 @@ func TestPerformUpgradeDownloadsAndReplacesExecutable(t *testing.T) {
 	if got, want := string(data), "new-binary"; got != want {
 		t.Fatalf("installed binary = %q, want %q", got, want)
 	}
-	if !strings.Contains(output.String(), "upgraded claude-switch to latest release") {
+	if !strings.Contains(output.String(), "upgraded code-switch to latest release") {
 		t.Fatalf("expected success output, got %q", output.String())
 	}
 }
@@ -763,7 +763,7 @@ func TestCmdConfigureSwitchesAndStoresAPIKey(t *testing.T) {
 		t.Fatalf("cmdConfigure returned error: %v", err)
 	}
 
-	configBytes, err := os.ReadFile(filepath.Join(home, ".claude-switch", "config.json"))
+	configBytes, err := os.ReadFile(filepath.Join(home, ".code-switch", "config.json"))
 	if err != nil {
 		t.Fatalf("read config: %v", err)
 	}
@@ -851,7 +851,7 @@ func TestCmdConfigureReusesExistingAPIKeyWithoutPrompting(t *testing.T) {
 			"minimax-cn": {APIKey: "sk-existing"},
 		},
 	}
-	configPath := filepath.Join(home, ".claude-switch", "config.json")
+	configPath := filepath.Join(home, ".code-switch", "config.json")
 	if err := writeJSONAtomic(configPath, cfg); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -893,7 +893,7 @@ func TestCmdConfigureResetKeyPromptsForNewValue(t *testing.T) {
 			"minimax-cn": {APIKey: "sk-existing"},
 		},
 	}
-	configPath := filepath.Join(home, ".claude-switch", "config.json")
+	configPath := filepath.Join(home, ".code-switch", "config.json")
 	if err := writeJSONAtomic(configPath, cfg); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -932,7 +932,7 @@ func TestRunTopLevelResetKeyConfigures(t *testing.T) {
 			"minimax-cn": {APIKey: "sk-existing"},
 		},
 	}
-	configPath := filepath.Join(home, ".claude-switch", "config.json")
+	configPath := filepath.Join(home, ".code-switch", "config.json")
 	if err := writeJSONAtomic(configPath, cfg); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -1301,7 +1301,7 @@ func TestCmdSetKey(t *testing.T) {
 		t.Fatalf("cmdSetKey returned error: %v", err)
 	}
 
-	configBytes, err := os.ReadFile(filepath.Join(home, ".claude-switch", "config.json"))
+	configBytes, err := os.ReadFile(filepath.Join(home, ".code-switch", "config.json"))
 	if err != nil {
 		t.Fatalf("read config: %v", err)
 	}
@@ -1589,7 +1589,7 @@ func TestCmdSwitchUsesStoredKey(t *testing.T) {
 			"openrouter": {APIKey: "sk-stored"},
 		},
 	}
-	configPath := filepath.Join(home, ".claude-switch", "config.json")
+	configPath := filepath.Join(home, ".code-switch", "config.json")
 	if err := writeJSONAtomic(configPath, cfg); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -1648,7 +1648,7 @@ func TestCmdSwitchOllamaCloudUsesStoredAPIKey(t *testing.T) {
 			"ollama-cloud": {APIKey: "ollama-sk"},
 		},
 	}
-	configPath := filepath.Join(home, ".claude-switch", "config.json")
+	configPath := filepath.Join(home, ".code-switch", "config.json")
 	if err := writeJSONAtomic(configPath, cfg); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -1688,7 +1688,7 @@ func TestCmdConfigureOllamaNoAPIKey(t *testing.T) {
 		t.Fatalf("cmdConfigure returned error: %v", err)
 	}
 
-	configBytes, err := os.ReadFile(filepath.Join(home, ".claude-switch", "config.json"))
+	configBytes, err := os.ReadFile(filepath.Join(home, ".code-switch", "config.json"))
 	if err != nil {
 		t.Fatalf("read config: %v", err)
 	}
@@ -1715,7 +1715,7 @@ func TestCmdConfigureRespectsStoredModel(t *testing.T) {
 			"minimax-cn": {APIKey: "sk-existing", Model: "MiniMax-M2.5"},
 		},
 	}
-	configPath := filepath.Join(home, ".claude-switch", "config.json")
+	configPath := filepath.Join(home, ".code-switch", "config.json")
 	if err := writeJSONAtomic(configPath, cfg); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -1754,7 +1754,7 @@ func TestCmdConfigureCustomProviderFallback(t *testing.T) {
 		t.Fatalf("cmdConfigure returned error: %v", err)
 	}
 
-	configBytes, err := os.ReadFile(filepath.Join(home, ".claude-switch", "config.json"))
+	configBytes, err := os.ReadFile(filepath.Join(home, ".code-switch", "config.json"))
 	if err != nil {
 		t.Fatalf("read config: %v", err)
 	}
@@ -1957,7 +1957,7 @@ func TestRunEmptyArgsConfigures(t *testing.T) {
 		t.Fatalf("runWithIO returned error: %v", err)
 	}
 
-	configBytes, err := os.ReadFile(filepath.Join(home, ".claude-switch", "config.json"))
+	configBytes, err := os.ReadFile(filepath.Join(home, ".code-switch", "config.json"))
 	if err != nil {
 		t.Fatalf("read config: %v", err)
 	}
@@ -1981,7 +1981,7 @@ func TestRunConfigureSubcommand(t *testing.T) {
 		t.Fatalf("runWithIO(configure) returned error: %v", err)
 	}
 
-	configBytes, err := os.ReadFile(filepath.Join(home, ".claude-switch", "config.json"))
+	configBytes, err := os.ReadFile(filepath.Join(home, ".code-switch", "config.json"))
 	if err != nil {
 		t.Fatalf("read config: %v", err)
 	}
@@ -2037,7 +2037,7 @@ func TestRunHelpSubcommand(t *testing.T) {
 		t.Fatalf("runWithIO help returned error: %v", err)
 	}
 	out := output.String()
-	if !strings.Contains(out, "claude-switch") {
+	if !strings.Contains(out, "code-switch") {
 		t.Fatalf("expected help text, got %q", out)
 	}
 }
@@ -2229,7 +2229,7 @@ func TestCmdListWithCustomProviders(t *testing.T) {
 			"my-custom": {Name: "My Custom", BaseURL: "https://custom.example.com/api", Model: "my-model"},
 		},
 	}
-	configPath := filepath.Join(home, ".claude-switch", "config.json")
+	configPath := filepath.Join(home, ".code-switch", "config.json")
 	if err := writeJSONAtomic(configPath, cfg); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -2651,7 +2651,7 @@ func TestCmdTestIntegration(t *testing.T) {
 			},
 		},
 	}
-	configPath := filepath.Join(home, ".claude-switch", "config.json")
+	configPath := filepath.Join(home, ".code-switch", "config.json")
 	if err := writeJSONAtomic(configPath, cfg); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -2684,7 +2684,7 @@ func TestCmdTestWithStoredKey(t *testing.T) {
 			},
 		},
 	}
-	configPath := filepath.Join(home, ".claude-switch", "config.json")
+	configPath := filepath.Join(home, ".code-switch", "config.json")
 	if err := writeJSONAtomic(configPath, cfg); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -2709,7 +2709,7 @@ func TestCmdRemovePresetProvider(t *testing.T) {
 			"deepseek": {APIKey: "sk-deepseek", Model: "v4"},
 		},
 	}
-	configPath := filepath.Join(home, ".claude-switch", "config.json")
+	configPath := filepath.Join(home, ".code-switch", "config.json")
 	if err := writeJSONAtomic(configPath, cfg); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -2740,7 +2740,7 @@ func TestCmdRemoveCustomProvider(t *testing.T) {
 			"my-custom": {Name: "Custom", BaseURL: "https://custom.example.com", Model: "m1", APIKey: "sk-1"},
 		},
 	}
-	configPath := filepath.Join(home, ".claude-switch", "config.json")
+	configPath := filepath.Join(home, ".code-switch", "config.json")
 	if err := writeJSONAtomic(configPath, cfg); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -2868,7 +2868,7 @@ func TestCmdTestCustomPath(t *testing.T) {
 			},
 		},
 	}
-	configPath := filepath.Join(home, ".claude-switch", "config.json")
+	configPath := filepath.Join(home, ".code-switch", "config.json")
 	if err := writeJSONAtomic(configPath, cfg); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -2893,7 +2893,7 @@ func TestCmdConfigureDryRun(t *testing.T) {
 			"openrouter": {APIKey: "sk-existing", Model: "anthropic/claude-sonnet-4.6"},
 		},
 	}
-	configPath := filepath.Join(home, ".claude-switch", "config.json")
+	configPath := filepath.Join(home, ".code-switch", "config.json")
 	if err := writeJSONAtomic(configPath, cfg); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -2985,7 +2985,7 @@ func TestValidateSHA256FileNotFound(t *testing.T) {
 }
 
 func TestDownloadChecksumContentOK(t *testing.T) {
-	expectedContent := "abc123def456  claude-switch-linux-amd64.tar.gz\n"
+	expectedContent := "abc123def456  code-switch-linux-amd64.tar.gz\n"
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(expectedContent))
 	}))
@@ -3642,7 +3642,7 @@ func TestCmdRemoveNoForceCancelled(t *testing.T) {
 			"deepseek": {APIKey: "sk-test"},
 		},
 	}
-	configPath := filepath.Join(home, ".claude-switch", "config.json")
+	configPath := filepath.Join(home, ".code-switch", "config.json")
 	if err := writeJSONAtomic(configPath, cfg); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -3676,7 +3676,7 @@ func TestCmdRemoveConfirmYes(t *testing.T) {
 			"deepseek": {APIKey: "sk-test"},
 		},
 	}
-	configPath := filepath.Join(home, ".claude-switch", "config.json")
+	configPath := filepath.Join(home, ".code-switch", "config.json")
 	if err := writeJSONAtomic(configPath, cfg); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
@@ -3758,7 +3758,7 @@ func TestRunWithIORemove(t *testing.T) {
 			"minimax-cn": {APIKey: "sk-test"},
 		},
 	}
-	if err := writeJSONAtomic(filepath.Join(home, ".claude-switch", "config.json"), cfg); err != nil {
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
@@ -3786,7 +3786,7 @@ func TestRunWithIOTest(t *testing.T) {
 			"my-test": {BaseURL: server.URL, Model: "m1", APIKey: "sk-1"},
 		},
 	}
-	if err := writeJSONAtomic(filepath.Join(home, ".claude-switch", "config.json"), cfg); err != nil {
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
@@ -4435,7 +4435,7 @@ func TestPerformUpgradeDefaultValues(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/releases/latest") {
-			http.Redirect(w, r, "/doublepi123/claude_switch/releases/tag/v2.0.0", http.StatusFound)
+			http.Redirect(w, r, "/doublepi123/code_switch/releases/tag/v2.0.0", http.StatusFound)
 			return
 		}
 		if strings.HasSuffix(r.URL.Path, "/releases/tag/v2.0.0") {
@@ -4633,7 +4633,7 @@ func TestRunWithIOSwitchStoredKey(t *testing.T) {
 			"openrouter": {APIKey: "sk-stored"},
 		},
 	}
-	if err := writeJSONAtomic(filepath.Join(home, ".claude-switch", "config.json"), cfg); err != nil {
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
@@ -4712,7 +4712,7 @@ func TestCmdSetKeyWithModelArg(t *testing.T) {
 	if err := cmdSetKey([]string{"openrouter", "sk-test-12345"}); err != nil {
 		t.Fatalf("cmdSetKey: %v", err)
 	}
-	configBytes, err := os.ReadFile(filepath.Join(home, ".claude-switch", "config.json"))
+	configBytes, err := os.ReadFile(filepath.Join(home, ".code-switch", "config.json"))
 	if err != nil {
 		t.Fatalf("read config: %v", err)
 	}
@@ -5103,7 +5103,7 @@ func TestResolveProviderAndKeyStoredKey(t *testing.T) {
 			"minimax-cn": {APIKey: "sk-stored-minimax"},
 		},
 	}
-	if err := writeJSONAtomic(filepath.Join(home, ".claude-switch", "config.json"), cfg); err != nil {
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
@@ -5230,7 +5230,7 @@ func TestPrintVersionCustom(t *testing.T) {
 	t.Cleanup(func() { version = oldVersion })
 	output := &bytes.Buffer{}
 	printVersion(output)
-	if output.String() != "claude-switch v-custom-test\n" {
+	if output.String() != "code-switch v-custom-test\n" {
 		t.Fatalf("printVersion = %q", output.String())
 	}
 }
@@ -5246,7 +5246,7 @@ func TestCmdConfigureAllFlags(t *testing.T) {
 			"deepseek": {APIKey: "sk-existing-ds", Model: "deepseek-v4-pro"},
 		},
 	}
-	if err := writeJSONAtomic(filepath.Join(home, ".claude-switch", "config.json"), cfg); err != nil {
+	if err := writeJSONAtomic(filepath.Join(home, ".code-switch", "config.json"), cfg); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
@@ -5564,7 +5564,7 @@ func TestReadLineError(t *testing.T) {
 func TestLoadAppConfigInvalidJSON(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	configDir := filepath.Join(home, ".claude-switch")
+	configDir := filepath.Join(home, ".code-switch")
 	if err := os.MkdirAll(configDir, 0o755); err != nil {
 		t.Fatal(err)
 	}

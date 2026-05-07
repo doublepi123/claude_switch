@@ -88,11 +88,17 @@ type StoredProvider struct {
 	AuthEnv string `json:"authEnv,omitempty"`
 }
 
+type AgentConfig struct {
+	Providers map[string]StoredProvider `json:"providers,omitempty"`
+}
+
 type AppConfig struct {
 	Providers map[string]StoredProvider `json:"providers"`
+	Agents    map[string]AgentConfig    `json:"agents,omitempty"`
 }
 
 type ConfigureSelection struct {
+	Agent    string
 	Provider string
 	Model    string
 	ResetKey bool
@@ -101,6 +107,13 @@ type ConfigureSelection struct {
 	BaseURL  string
 	AuthEnv  string
 }
+
+type AgentName string
+
+const (
+	agentClaude AgentName = "claude"
+	agentCodex  AgentName = "codex"
+)
 
 var providerPresets = map[string]ProviderPreset{
 	"minimax-cn": {
@@ -268,8 +281,9 @@ var providerAliases = map[string]string{
 }
 
 const customProviderOption = "__custom__"
+const restoreProviderOption = "__restore__"
 const customDetectedProvider = "custom"
-const defaultUpgradeRepo = "doublepi123/claude_switch"
+const defaultUpgradeRepo = "doublepi123/code_switch"
 
 var version = "dev"
 

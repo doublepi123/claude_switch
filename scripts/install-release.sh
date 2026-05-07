@@ -2,9 +2,9 @@
 
 set -eu
 
-PROJECT_NAME=${PROJECT_NAME:-claude-switch}
+PROJECT_NAME=${PROJECT_NAME:-code-switch}
 COMMAND_NAME=${COMMAND_NAME:-cs}
-REPO=${REPO:-doublepi123/claude_switch}
+REPO=${REPO:-doublepi123/code_switch}
 GITHUB_BASE_URL=${GITHUB_BASE_URL:-https://github.com}
 TAG=${TAG:-latest}
 
@@ -64,7 +64,7 @@ download_file() {
     wget -qO "$dest" "$url"
     return
   fi
-  echo 'curl or wget is required to download claude-switch.' >&2
+  echo 'curl or wget is required to download code-switch.' >&2
   exit 1
 }
 
@@ -121,7 +121,7 @@ ensure_path_persisted() {
   if [ -f "$profile" ] && grep -F "$INSTALL_DIR" "$profile" >/dev/null 2>&1; then
     echo "PATH already appears to be configured in: $profile"
   elif {
-    printf '\n# claude-switch\n'
+    printf '\n# code-switch\n'
     printf 'export PATH="%s:$PATH"\n' "$INSTALL_DIR"
   } >> "$profile" 2>/dev/null; then
     echo "Added $INSTALL_DIR to PATH in: $profile"

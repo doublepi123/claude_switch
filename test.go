@@ -18,6 +18,7 @@ func cmdTest(args []string, out io.Writer) error {
 	providerArg, flagArgs := splitSwitchArgs(args)
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
+	agentFlag := fs.String("agent", string(agentClaude), "target agent: claude or codex")
 	apiKey := fs.String("api-key", "", "API key for the target provider")
 	model := fs.String("model", "", "model id to test with")
 	testPath := fs.String("path", "", "override API path (default: /v1/messages)")
@@ -25,26 +26,33 @@ func cmdTest(args []string, out io.Writer) error {
 		return err
 	}
 	if providerArg == "" || fs.NArg() != 0 {
-		return errors.New("usage: claude-switch test <provider> [--api-key sk-xxx] [--model model-id] [--path /custom/api/path]")
+		return errors.New("usage: code-switch test <provider> [--agent claude|codex] [--api-key sk-xxx] [--model model-id] [--path /custom/api/path]")
 	}
-
-	pa, cfg, err := resolveProviderAndKey(providerArg, *apiKey, *model)
+	agent, err := parseAgentName(*agentFlag)
 	if err != nil {
 		return err
 	}
 
-	preset, err := resolveSwitchPreset(pa.Provider, cfg, pa.Model)
+	pa, cfg, _, err := resolveProviderAndKeyForAgent(agent, providerArg, *apiKey, *model)
 	if err != nil {
 		return err
+	}
+
+	preset, err := resolveAgentSwitchPreset(agent, pa.Provider, cfg, pa.Model)
+	if err != nil {
+		return err
+	}
+	if agent == agentCodex {
+		return testCodexProvider(out, preset, pa.APIKey)
 	}
 
 	return testProvider(out, preset, pa.APIKey, strings.TrimSpace(*testPath))
 }
 
 type testRequest struct {
-	Model     string         `json:"model"`
-	MaxTokens int            `json:"max_tokens"`
-	Messages  []testMessage  `json:"messages"`
+	Model     string        `json:"model"`
+	MaxTokens int           `json:"max_tokens"`
+	Messages  []testMessage `json:"messages"`
 }
 
 type testMessage struct {
@@ -92,7 +100,7 @@ func testProviderWithClient(ctx context.Context, out io.Writer, preset ProviderP
 		httpReq.Header.Set("x-api-key", apiKey)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("User-Agent", "claude-switch/"+version)
+	httpReq.Header.Set("User-Agent", "code-switch/"+version)
 
 	resp, err := client.Do(httpReq)
 	if err != nil {

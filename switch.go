@@ -10,58 +10,88 @@ import (
 )
 
 type providerArgs struct {
+	Agent     AgentName
 	Provider  string
 	APIKey    string
 	Model     string
 	ClaudeDir string
+	CodexDir  string
 	DryRun    bool
 }
 
 func resolveProviderAndKey(providerArg, apiKeyFlag, model string) (*providerArgs, *AppConfig, error) {
+	pa, cfg, _, err := resolveProviderAndKeyForAgent(agentClaude, providerArg, apiKeyFlag, model)
+	return pa, cfg, err
+}
+
+func resolveProviderAndKeyForAgent(agent AgentName, providerArg, apiKeyFlag, model string) (*providerArgs, *AppConfig, string, error) {
 	provider := canonicalProviderName(providerArg)
-	cfg, _, err := loadAppConfig()
+	cfg, path, err := loadAppConfig()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, "", err
 	}
-	preset, err := resolveProviderPreset(provider, cfg)
+	preset, err := resolveAgentProviderPreset(agent, provider, cfg)
 	if err != nil {
-		return nil, nil, fmt.Errorf("unsupported provider %q", providerArg)
+		return nil, nil, "", fmt.Errorf("unsupported provider %q", providerArg)
 	}
 	key := strings.TrimSpace(apiKeyFlag)
 	if key == "" {
-		key = strings.TrimSpace(cfg.Providers[provider].APIKey)
+		if agent == agentCodex {
+			key = strings.TrimSpace(codexProviderConfig(cfg, provider).APIKey)
+			if key == "" {
+				key = strings.TrimSpace(cfg.Providers[provider].APIKey)
+			}
+		} else {
+			key = strings.TrimSpace(cfg.Providers[provider].APIKey)
+		}
 	}
 	if key == "" && !preset.NoAPIKey {
-		return nil, nil, fmt.Errorf("missing api key for %s, run `cs set-key %s <api-key>` or pass --api-key", provider, provider)
+		return nil, nil, "", fmt.Errorf("missing api key for %s, run `cs set-key %s <api-key>` or pass --api-key", provider, provider)
 	}
 	if key == "" {
 		key = provider
 	}
 	return &providerArgs{
+		Agent:    agent,
 		Provider: provider,
 		APIKey:   key,
 		Model:    strings.TrimSpace(model),
-	}, cfg, nil
+	}, cfg, path, nil
 }
 
 func cmdSwitch(args []string) error {
 	providerArg, flagArgs := splitSwitchArgs(args)
 	fs := flag.NewFlagSet("switch", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
+	agentFlag := fs.String("agent", string(agentClaude), "target agent: claude or codex")
 	apiKey := fs.String("api-key", "", "API key for the target provider")
 	model := fs.String("model", "", "override model id")
 	claudeDir := fs.String("claude-dir", "", "override Claude config dir")
+	codexDir := fs.String("codex-dir", "", "override Codex config dir")
 	dryRun := fs.Bool("dry-run", false, "preview what would be written without modifying settings.json")
 	if err := fs.Parse(flagArgs); err != nil {
 		return err
 	}
 	if providerArg == "" || fs.NArg() != 0 {
-		return errors.New("usage: claude-switch switch <provider> [--api-key sk-xxx] [--model model-id]")
+		return errors.New("usage: code-switch switch <provider> [--agent claude|codex] [--api-key sk-xxx] [--model model-id]")
 	}
-
-	pa, cfg, err := resolveProviderAndKey(providerArg, *apiKey, *model)
+	agent, err := parseAgentName(*agentFlag)
 	if err != nil {
 		return err
+	}
+
+	pa, cfg, configPath, err := resolveProviderAndKeyForAgent(agent, providerArg, *apiKey, *model)
+	if err != nil {
+		return err
+	}
+	if agent == agentCodex {
+		if err := switchCodexProvider(pa.Provider, cfg, pa.APIKey, pa.Model, *codexDir, os.Stdout, *dryRun); err != nil {
+			return err
+		}
+		if !*dryRun {
+			return writeJSONAtomic(configPath, cfg)
+		}
+		return nil
 	}
 	return switchProvider(pa.Provider, cfg, pa.APIKey, pa.Model, *claudeDir, os.Stdout, *dryRun)
 }
@@ -89,7 +119,7 @@ func switchFlagNeedsValue(arg string) bool {
 		return false
 	}
 	switch arg {
-	case "-api-key", "--api-key", "-model", "--model", "-claude-dir", "--claude-dir":
+	case "-api-key", "--api-key", "-model", "--model", "-path", "--path", "-claude-dir", "--claude-dir", "-codex-dir", "--codex-dir", "-agent", "--agent":
 		return true
 	default:
 		return false

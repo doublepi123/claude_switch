@@ -52,8 +52,9 @@ Multi-file Go project (~2700 lines of source + ~5200 lines of tests).
 - `StoredProvider` struct: persisted per-provider config (name, base URL, model, API key, authEnv)
 
 **Config files:**
-- App config: `~/.claude-switch/config.json` — stores per-provider settings including API keys (chmod 0o600)
-- Claude settings: `~/.claude/settings.json` — target file this tool modifies
+- App config: `~/.code-switch/config.json` — stores per-provider settings including API keys (chmod 0o600), migrated once from old `~/.claude-switch/config.json`
+- Claude settings: `~/.claude/settings.json` — Claude Code target file this tool modifies
+- Codex config: `~/.codex/config.toml` — Codex target file for `ollama-cloud` Responses API configuration
 - `managedEnvKeys` in `presets.go`: env vars this tool writes/clears when switching
 
 **TUI implementation:**
@@ -69,4 +70,4 @@ Multi-file Go project (~2700 lines of source + ~5200 lines of tests).
 - `writeJSONAtomic()` in `config.go`: writes via temp file then rename, chmod 0o600
 - `detectProvider()` in `presets.go`: identifies provider from base URL pattern
 
-**CLI subcommands:** `list`, `configure` (default, interactive TUI), `current`, `set-key`, `switch`, `test`, `remove`, `upgrade`, `completion`
+**CLI subcommands:** `list`, `configure` (default, interactive TUI), `current`, `set-key`, `switch`, `restore`, `test`, `remove`, `upgrade`, `completion`

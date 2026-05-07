@@ -1,22 +1,22 @@
-# claude-switch
+# code-switch
 
-`claude-switch` 是一个用于切换 Claude Code 后端供应商的 Go 命令行工具，安装后的命令名是 `cs`。
+`code-switch` 是一个用于切换 Claude Code 和 Codex 后端供应商的 Go 命令行工具，安装后的命令名是 `cs`。
 
 直接输入 `cs` 就会进入 TUI 配置界面。
 
-它会更新 Claude Code 使用的 `settings.json`，让你在不同兼容供应商之间快速切换，同时保留无关配置。
+它会更新 Claude Code 使用的 `settings.json`，也可以写入 Codex 使用的 `config.toml`，让你在兼容供应商之间快速切换，同时保留无关配置。未指定 `--agent` 时默认操作 Claude Code，兼容原有 `cs switch openrouter`、`cs current` 等命令。
 
 仓库地址：
 
 ```bash
-git clone git@github.com:doublepi123/claude_switch.git
-cd claude_switch
+git clone git@github.com:doublepi123/code_switch.git
+cd code_switch
 ```
 
 ## 功能
 
 - 支持列出当前内置供应商
-- 支持查看当前 Claude Code 指向的供应商
+- 支持查看当前 Claude Code 或 Codex 指向的供应商
 - 支持保存各供应商 API Key
 - 支持自定义供应商名称和 Base URL
 - 支持为任意供应商保存自定义模型名
@@ -24,10 +24,15 @@ cd claude_switch
 - 支持方向键选择 provider 和模型
 - 支持显示已保存 API Key 的掩码摘要
 - 支持一键切换 `~/.claude/settings.json`
+- 支持 Codex + Ollama Cloud 的 Responses API 配置
+- 支持恢复 Claude Code 或 Codex 官方配置
+- 支持从旧 `~/.claude-switch/config.json` 迁移到 `~/.code-switch/config.json`
 - 切换前自动备份原始配置
 - 仅更新受管理的 `env` 字段，避免覆盖其他自定义配置
 
 ## 当前支持的供应商
+
+Claude Code 支持：
 
 | Provider | Base URL | 默认模型 |
 | --- | --- | --- |
@@ -54,7 +59,15 @@ cd claude_switch
 - `openrouter` 默认使用 OpenRouter 官方 Claude 映射：haiku、sonnet、opus 会分别写入对应的官方模型；如果输入自定义模型名，则三档都会使用这个自定义模型
 - `deepseek` 使用 DeepSeek Anthropic 兼容接口，API Key 会写入 `ANTHROPIC_AUTH_TOKEN`
 - `ollama` 使用本地 Ollama Anthropic 兼容接口，不要求 API Key；如果本地已经 `ollama signin`，也可以使用 `:cloud` 后缀模型
-- `ollama-cloud` 直接连接 `https://ollama.com`，需要在 Ollama settings 里创建 API Key，并会把 Key 写入 `ANTHROPIC_AUTH_TOKEN`
+- `ollama-cloud` 直接连接 `https://ollama.com`，需要在 Ollama settings 里创建 API Key；Claude Code 切换会把 Key 写入 `ANTHROPIC_AUTH_TOKEN`
+
+Codex 第一阶段只支持：
+
+| Provider | Base URL | 默认模型 |
+| --- | --- | --- |
+| `ollama-cloud` | `https://ollama.com/v1` | `qwen3-coder:480b` |
+
+Codex 写入 `~/.codex/config.toml`，使用 `wire_api = "responses"` 和 `env_key = "OLLAMA_API_KEY"`。API Key 只保存到 `~/.code-switch/config.json`，不会明文写入 Codex TOML。
 
 MiniMax 中国区参考官方 CN 文档：
 
@@ -79,7 +92,7 @@ Ollama / Ollama Cloud 参考文档：
 macOS / Linux 直接执行：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/doublepi123/claude_switch/main/scripts/install-release.sh | sh
+curl -fsSL https://raw.githubusercontent.com/doublepi123/code_switch/main/scripts/install-release.sh | sh
 ```
 
 脚本会自动识别 macOS / Linux 和 CPU 架构，默认安装到 `~/.local/bin/cs`。如果安装目录不在 `PATH`，脚本会写入当前 shell 的 profile，并打印当前终端立即生效所需的 `export` 命令。
@@ -87,19 +100,19 @@ curl -fsSL https://raw.githubusercontent.com/doublepi123/claude_switch/main/scri
 如需自定义安装目录：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/doublepi123/claude_switch/main/scripts/install-release.sh | INSTALL_DIR=/usr/local/bin sh
+curl -fsSL https://raw.githubusercontent.com/doublepi123/code_switch/main/scripts/install-release.sh | INSTALL_DIR=/usr/local/bin sh
 ```
 
 ### Windows x86_64 (PowerShell)
 
 ```powershell
-$installPath = "$env:LOCALAPPDATA\Programs\claude-switch\bin"; [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $ProgressPreference = 'SilentlyContinue'; Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/doublepi123/claude_switch/releases/latest/download/claude-switch-windows-amd64.zip" -OutFile "$env:TEMP\claude-switch.zip"; Expand-Archive -Path "$env:TEMP\claude-switch.zip" -DestinationPath "$env:TEMP\claude-switch" -Force; New-Item -Path $installPath -ItemType Directory -Force | Out-Null; Move-Item -Path "$env:TEMP\claude-switch\cs.exe" -Destination "$installPath\" -Force; Remove-Item -Path "$env:TEMP\claude-switch.zip","$env:TEMP\claude-switch" -Recurse -Force -ErrorAction SilentlyContinue; if ($env:Path -split ';' -notcontains $installPath) { [Environment]::SetEnvironmentVariable('Path', "$installPath;$([Environment]::GetEnvironmentVariable('Path','User'))", 'User'); $env:Path = "$installPath;$env:Path" }; cs --version
+$installPath = "$env:LOCALAPPDATA\Programs\code-switch\bin"; [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $ProgressPreference = 'SilentlyContinue'; Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/doublepi123/code_switch/releases/latest/download/code-switch-windows-amd64.zip" -OutFile "$env:TEMP\code-switch.zip"; Expand-Archive -Path "$env:TEMP\code-switch.zip" -DestinationPath "$env:TEMP\code-switch" -Force; New-Item -Path $installPath -ItemType Directory -Force | Out-Null; Move-Item -Path "$env:TEMP\code-switch\cs.exe" -Destination "$installPath\" -Force; Remove-Item -Path "$env:TEMP\code-switch.zip","$env:TEMP\code-switch" -Recurse -Force -ErrorAction SilentlyContinue; if ($env:Path -split ';' -notcontains $installPath) { [Environment]::SetEnvironmentVariable('Path', "$installPath;$([Environment]::GetEnvironmentVariable('Path','User'))", 'User'); $env:Path = "$installPath;$env:Path" }; cs --version
 ```
 
 ### Windows ARM64 (PowerShell)
 
 ```powershell
-$installPath = "$env:LOCALAPPDATA\Programs\claude-switch\bin"; [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $ProgressPreference = 'SilentlyContinue'; Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/doublepi123/claude_switch/releases/latest/download/claude-switch-windows-arm64.zip" -OutFile "$env:TEMP\claude-switch.zip"; Expand-Archive -Path "$env:TEMP\claude-switch.zip" -DestinationPath "$env:TEMP\claude-switch" -Force; New-Item -Path $installPath -ItemType Directory -Force | Out-Null; Move-Item -Path "$env:TEMP\claude-switch\cs.exe" -Destination "$installPath\" -Force; Remove-Item -Path "$env:TEMP\claude-switch.zip","$env:TEMP\claude-switch" -Recurse -Force -ErrorAction SilentlyContinue; if ($env:Path -split ';' -notcontains $installPath) { [Environment]::SetEnvironmentVariable('Path', "$installPath;$([Environment]::GetEnvironmentVariable('Path','User'))", 'User'); $env:Path = "$installPath;$env:Path" }; cs --version
+$installPath = "$env:LOCALAPPDATA\Programs\code-switch\bin"; [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; $ProgressPreference = 'SilentlyContinue'; Invoke-WebRequest -UseBasicParsing -Uri "https://github.com/doublepi123/code_switch/releases/latest/download/code-switch-windows-arm64.zip" -OutFile "$env:TEMP\code-switch.zip"; Expand-Archive -Path "$env:TEMP\code-switch.zip" -DestinationPath "$env:TEMP\code-switch" -Force; New-Item -Path $installPath -ItemType Directory -Force | Out-Null; Move-Item -Path "$env:TEMP\code-switch\cs.exe" -Destination "$installPath\" -Force; Remove-Item -Path "$env:TEMP\code-switch.zip","$env:TEMP\code-switch" -Recurse -Force -ErrorAction SilentlyContinue; if ($env:Path -split ';' -notcontains $installPath) { [Environment]::SetEnvironmentVariable('Path', "$installPath;$([Environment]::GetEnvironmentVariable('Path','User'))", 'User'); $env:Path = "$installPath;$env:Path" }; cs --version
 ```
 
 安装完成后验证：
@@ -246,16 +259,20 @@ cs
 
 TUI 操作方式：
 
-- 一级 `Providers`
+- 一级 `Agents`
+  - `Claude Code`
+  - `Codex`
+- 二级 `Providers`
   - `↑` / `↓`：切换 provider
   - `Enter` / `→`：进入 provider 详情页
   - 选择 `custom...` 可创建自定义供应商
-- 二级 `Provider details`
+  - 选择 `Restore official config...` 可恢复所选 agent 的官方配置
+- 三级 `Provider details`
   - `Enter` / `→`：进入下一步
   - 如果当前 provider 还没有已保存 key，会先要求输入并保存 API Key，再进入模型页
   - `k`：立即修改 API Key
   - `←` / `q`：返回 provider 列表
-- 三级 `Models`
+- 四级 `Models`
   - `↑` / `↓`：切换模型
   - `c`：输入任意自定义模型名，并保存为该 provider 的默认模型
   - `Enter`：确认并应用
@@ -275,6 +292,7 @@ cs --reset-key
 
 ```bash
 cs current
+cs current --agent codex
 ```
 
 默认读取：
@@ -283,10 +301,17 @@ cs current
 ~/.claude/settings.json
 ```
 
+Codex 默认读取：
+
+```text
+~/.codex/config.toml
+```
+
 也可以通过 `--claude-dir` 指定 Claude 配置目录：
 
 ```bash
 cs current --claude-dir /path/to/.claude
+cs current --agent codex --codex-dir /path/to/.codex
 ```
 
 ### 4. 保存 API Key
@@ -310,7 +335,7 @@ cs set-key minimax-global-token sk-xxx
 保存后会写入：
 
 ```text
-~/.claude-switch/config.json
+~/.code-switch/config.json
 ```
 
 如果你不想落盘保存，也可以在切换时临时传入 `--api-key`。
@@ -326,6 +351,7 @@ cs switch openrouter
 cs switch deepseek
 cs switch opencode-go
 cs switch ollama-cloud
+cs switch ollama-cloud --agent codex --api-key ollama-sk-xxx
 ```
 
 MiniMax 中国区：
@@ -348,6 +374,20 @@ cs switch ollama-cloud --api-key ollama-sk-xxx
 ```
 
 如果本地还没有 `~/.claude/settings.json`，工具会自动创建它。
+
+如果本地还没有 `~/.codex/config.toml`，使用 `--agent codex` 时工具会自动创建它，并写入 Ollama Cloud 的 Responses API provider 配置：
+
+```toml
+model = "qwen3-coder:480b"
+model_provider = "ollama-cloud"
+
+[model_providers.ollama-cloud]
+name = "Ollama Cloud"
+base_url = "https://ollama.com/v1"
+env_key = "OLLAMA_API_KEY"
+env_key_instructions = "Set OLLAMA_API_KEY to your Ollama API key"
+wire_api = "responses"
+```
 
 ### 6. 覆盖默认模型
 
@@ -384,6 +424,7 @@ OpenCode Go 文档里的 GLM、Kimi、MiMo、Qwen 等模型走的是 `https://op
 
 ```bash
 cs switch minimax-cn --claude-dir /path/to/.claude
+cs switch ollama-cloud --agent codex --codex-dir /path/to/.codex
 ```
 
 这对测试环境、多套 Claude 配置，或者首次调试很有用。
@@ -393,7 +434,10 @@ cs switch minimax-cn --claude-dir /path/to/.claude
 默认情况下，工具会操作以下文件：
 
 - Claude 配置：`~/.claude/settings.json`
-- 本工具配置：`~/.claude-switch/config.json`
+- Codex 配置：`~/.codex/config.toml`
+- 本工具配置：`~/.code-switch/config.json`
+
+启动时如果新的 `~/.code-switch/config.json` 不存在，但旧的 `~/.claude-switch/config.json` 存在，工具会迁移一次到新路径。旧文件不会被删除或修改。
 
 在执行 `switch` 时：
 
@@ -417,6 +461,19 @@ cs switch minimax-cn --claude-dir /path/to/.claude
 - `CLAUDE_CODE_EFFORT_LEVEL`
 
 大多数 provider 的 API Key 会写入 `ANTHROPIC_API_KEY`，包括 `opencode-go` 的 MiniMax 和 DeepSeek 模型。`deepseek`、`xiaomimimo-cn`、`ollama` 和 `ollama-cloud` provider 会写入 `ANTHROPIC_AUTH_TOKEN`。工具会在切换时清理另一种旧鉴权字段，避免 Claude Code 出现鉴权冲突提示。
+
+Codex 的 API Key 不写入 TOML；Codex 运行时请通过环境变量提供：
+
+```bash
+export OLLAMA_API_KEY=ollama-sk-xxx
+```
+
+恢复官方配置：
+
+```bash
+cs restore --agent claude
+cs restore --agent codex
+```
 
 ## 示例
 
@@ -483,7 +540,7 @@ macOS / Linux 通常需要把下面路径加入 shell 配置：
 Windows 通常需要把下面路径加入用户 `Path`：
 
 ```text
-$HOME\AppData\Local\Programs\claude-switch\bin
+$HOME\AppData\Local\Programs\code-switch\bin
 ```
 
 ### 2. 切换前会不会覆盖我原来的 Claude 配置

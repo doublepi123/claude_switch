@@ -32,10 +32,11 @@ If the fix touches provider logic, also run `cs test <provider>` (if that provid
 
 ## Config Files This Tool Touches
 
-- **App config** (`~/.claude-switch/config.json`): stores per-provider API keys, models. Handled by `loadAppConfig` / `writeJSONAtomic`.
+- **App config** (`~/.code-switch/config.json`): stores per-provider API keys, models. Handled by `loadAppConfig` / `writeJSONAtomic`. `loadAppConfig` migrates old `~/.claude-switch/config.json` once without deleting it.
 - **Claude settings** (`~/.claude/settings.json`): the target this tool modifies. Backed up before write (`backupIfExists`), written atomically.
+- **Codex config** (`~/.codex/config.toml`): Codex target config, managed for first-phase `ollama-cloud` support.
 
-Both paths can be overridden: settings path via `--claude-dir`, app config path is always under `~/.claude-switch/`.
+Agent config paths can be overridden with `--claude-dir` and `--codex-dir`; app config path is always under `~/.code-switch/`.
 
 ## Architecture Notes
 
@@ -49,7 +50,7 @@ Multi-file project (~2700 loc source, ~5200 loc tests). Key sections:
 - **Auth env priority**: providers with `AuthEnv: ANTHROPIC_AUTH_TOKEN` (currently `deepseek`, `xiaomimimo-cn`, `ollama`, and `ollama-cloud`) write bearer tokens; providers without `AuthEnv` write to `ANTHROPIC_API_KEY`. Both keys are in `managedEnvKeys` and get cleared on switch to avoid duplicates.
 - **`managedEnvKeys`**: the full set of env keys deleted before applying a new preset. If a provider's `ExtraEnv` doesn't include a key, it's simply not re-set.
 - **Custom providers**: persist in `cfg.Providers` map. `sortedProviderNames()` filters out entries with empty `BaseURL`. Created only via TUI or fallback text prompts — `cmdSetKey` cannot create one from scratch.
-- **CLI subcommands**: `list`, `configure` (default TUI), `current`, `set-key`, `switch`, `test`, `remove`, `upgrade`, `completion` (bash/zsh/fish).
+- **CLI subcommands**: `list`, `configure` (default TUI), `current`, `set-key`, `switch`, `restore`, `test`, `remove`, `upgrade`, `completion` (bash/zsh/fish).
 
 ## Testing Gotchas
 
@@ -64,4 +65,4 @@ Multi-file project (~2700 loc source, ~5200 loc tests). Key sections:
 - `splitSwitchArgs` must handle `--key=value` (no space) vs `--key value` (space). The former's value is embedded, the latter consumes the next arg.
 - `canonicalProviderName` normalizes and resolves `providerAliases`. Always run user-entered provider names through it.
 - `resolveSwitchPreset` validates models for opencode-go against `unsupportedOpenCodeGoAnthropicModels` — chat/completions-only models are rejected with a descriptive error.
-- Release artifacts: `claude-switch-{os}-{arch}.tar.gz` (or `.zip` on Windows), each containing a single `cs` or `cs.exe` file. The `upgrade` command's `upgradeAssetName()` must match this convention.
+- Release artifacts: `code-switch-{os}-{arch}.tar.gz` (or `.zip` on Windows), each containing a single `cs` or `cs.exe` file. The `upgrade` command's `upgradeAssetName()` must match this convention.

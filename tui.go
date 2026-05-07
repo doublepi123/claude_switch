@@ -17,12 +17,19 @@ import (
 func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 	fs := flag.NewFlagSet("configure", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
+	agentFlag := fs.String("agent", string(agentClaude), "target agent: claude or codex")
 	claudeDir := fs.String("claude-dir", "", "override Claude config dir")
+	codexDir := fs.String("codex-dir", "", "override Codex config dir")
 	resetKey := fs.Bool("reset-key", false, "force re-enter api key for the selected provider")
 	dryRun := fs.Bool("dry-run", false, "preview what would be written without modifying settings.json")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	agent, err := parseAgentName(*agentFlag)
+	if err != nil {
+		return err
+	}
+	agentExplicit := flagWasProvided(fs, "agent")
 
 	cfg, configPath, err := loadAppConfig()
 	if err != nil {
@@ -33,21 +40,42 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 	reader := bufio.NewReader(in)
 	var selection ConfigureSelection
 	if file, ok := in.(*os.File); ok && shouldUseArrowTUI(file) {
-		selection, err = runArrowTUI(cfg, currentProvider, currentModel)
+		selection, err = runArrowTUI(cfg, agent, !agentExplicit, currentProvider, currentModel)
 		if err != nil {
 			return err
 		}
 	} else {
-		selection, err = promptConfigureSelectionFallback(reader, out, cfg, currentProvider, currentModel)
+		selection, err = promptConfigureSelectionFallback(reader, out, cfg, agent, currentProvider, currentModel)
 		if err != nil {
 			return err
 		}
 	}
+	if selection.Agent == "" {
+		selection.Agent = string(agent)
+	}
+	agent, err = parseAgentName(selection.Agent)
+	if err != nil {
+		return err
+	}
 	provider := selection.Provider
+	if provider == restoreProviderOption {
+		switch agent {
+		case agentCodex:
+			return restoreCodexConfig(*codexDir, cfg, out, *dryRun)
+		default:
+			return restoreClaudeConfig(*claudeDir, out, *dryRun)
+		}
+	}
+	if agent == agentClaude && strings.TrimSpace(selection.BaseURL) != "" {
+		upsertProviderConfig(cfg, selection, strings.TrimSpace(selection.APIKey))
+	}
 
-	preset, _ := resolveProviderPreset(provider, cfg)
+	preset, err := resolveAgentProviderPreset(agent, provider, cfg)
+	if err != nil {
+		return err
+	}
 
-	existingKey := strings.TrimSpace(cfg.Providers[provider].APIKey)
+	existingKey := storedAPIKeyForAgent(cfg, agent, provider)
 	apiKey := existingKey
 	if preset.NoAPIKey {
 		if apiKey == "" {
@@ -66,25 +94,31 @@ func cmdConfigure(args []string, in io.Reader, out io.Writer) error {
 	upsertProviderConfig(cfg, selection, apiKey)
 
 	if *dryRun {
-		preset, err := resolveSwitchPreset(provider, cfg, selection.Model)
+		preset, err := resolveAgentSwitchPreset(agent, provider, cfg, selection.Model)
 		if err != nil {
 			return err
 		}
 		fmt.Fprintf(out, "[dry-run] would save provider config for %s in %s\n", provider, configPath)
-		fmt.Fprintf(out, "[dry-run] would switch Claude to %s\n", preset.Name)
+		fmt.Fprintf(out, "[dry-run] would switch %s to %s\n", agentDisplayName(agent), preset.Name)
 		fmt.Fprintf(out, "[dry-run] base_url: %s\n", preset.BaseURL)
 		fmt.Fprintf(out, "[dry-run] model: %s\n", preset.Model)
 		return nil
 	}
 
+	switch agent {
+	case agentCodex:
+		if err := switchCodexProvider(provider, cfg, apiKey, selection.Model, *codexDir, out, false); err != nil {
+			return err
+		}
+	default:
+		if err := switchProvider(provider, cfg, apiKey, selection.Model, *claudeDir, out, false); err != nil {
+			return err
+		}
+	}
 	if err := writeJSONAtomic(configPath, cfg); err != nil {
 		return err
 	}
 	fmt.Fprintf(out, "saved provider config for %s in %s\n", provider, configPath)
-
-	if err := switchProvider(provider, cfg, apiKey, selection.Model, *claudeDir, out, false); err != nil {
-		return err
-	}
 	return nil
 }
 
@@ -92,6 +126,8 @@ type tuiState struct {
 	app             *tview.Application
 	pages           *tview.Pages
 	cfg             *AppConfig
+	agent           AgentName
+	selectAgent     bool
 	currentProvider string
 	currentModel    string
 	names           []string
@@ -101,7 +137,7 @@ type tuiState struct {
 	resetKeys        map[string]bool
 	customModels     map[string]string
 
-	result   ConfigureSelection
+	result    ConfigureSelection
 	resultErr error
 
 	providerList *tview.List
@@ -110,11 +146,15 @@ type tuiState struct {
 }
 
 func (ts *tuiState) buildModels(provider string) []string {
+	if ts.agent == agentCodex {
+		return buildModelListForAgent(ts.cfg, ts.agent, provider, ts.customModels)
+	}
 	return buildModelList(ts.cfg, provider, ts.customModels)
 }
 
 func (ts *tuiState) finishSelection(provider, model string) {
 	ts.result = ConfigureSelection{
+		Agent:    string(ts.agent),
 		Provider: provider,
 		Model:    model,
 		ResetKey: ts.resetKeys[provider],
@@ -125,6 +165,7 @@ func (ts *tuiState) finishSelection(provider, model string) {
 }
 
 func (ts *tuiState) showProviders() {
+	ts.names = providerNamesForAgent(ts.agent, ts.cfg, ts.agent == agentClaude, true)
 	ts.rebuildProviderList()
 	ts.pages.SwitchToPage("providers")
 	ts.app.SetFocus(ts.providerList)
@@ -141,7 +182,11 @@ func (ts *tuiState) rebuildProviderList() {
 			ts.providerList.AddItem("custom...", "Add a custom Anthropic-compatible provider", 0, nil)
 			continue
 		}
-		preset, err := resolveProviderPreset(name, ts.cfg)
+		if name == restoreProviderOption {
+			ts.providerList.AddItem("Restore official config...", agentDisplayName(ts.agent), 0, nil)
+			continue
+		}
+		preset, err := resolveAgentProviderPreset(ts.agent, name, ts.cfg)
 		if err != nil {
 			continue
 		}
@@ -151,7 +196,7 @@ func (ts *tuiState) rebuildProviderList() {
 		}
 		if preset.NoAPIKey {
 			suffix = append(suffix, "no key needed")
-		} else if strings.TrimSpace(ts.cfg.Providers[name].APIKey) != "" {
+		} else if storedAPIKeyForAgent(ts.cfg, ts.agent, name) != "" {
 			suffix = append(suffix, "saved")
 		}
 		title := providerTitle(name, ts.cfg)
@@ -165,14 +210,14 @@ func (ts *tuiState) rebuildProviderList() {
 
 func (ts *tuiState) showDetail(provider, backPage string) {
 	ts.selectedProvider = provider
-	preset, err := resolveProviderPreset(provider, ts.cfg)
+	preset, err := resolveAgentProviderPreset(ts.agent, provider, ts.cfg)
 	if err != nil {
 		ts.resultErr = err
 		ts.app.Stop()
 		return
 	}
 
-	hasSavedKey := strings.TrimSpace(ts.cfg.Providers[provider].APIKey) != ""
+	hasSavedKey := storedAPIKeyForAgent(ts.cfg, ts.agent, provider) != ""
 	var b strings.Builder
 	fmt.Fprintf(&b, "[::b]Provider[::-]  %s\n", providerTitle(provider, ts.cfg))
 	fmt.Fprintf(&b, "[::b]Preset[::-]    %s\n", preset.Name)
@@ -180,7 +225,7 @@ func (ts *tuiState) showDetail(provider, backPage string) {
 	if preset.NoAPIKey {
 		fmt.Fprintf(&b, "[::b]API Key[::-]   [green]Not required[-]\n")
 	} else {
-		fmt.Fprintf(&b, "[::b]Saved Key[::-] %s\n", maskAPIKey(ts.cfg.Providers[provider].APIKey))
+		fmt.Fprintf(&b, "[::b]Saved Key[::-] %s\n", maskAPIKey(storedAPIKeyForAgent(ts.cfg, ts.agent, provider)))
 	}
 	fmt.Fprintf(&b, "[::b]Active[::-]    %s / %s\n", currentProviderLabel(ts.currentProvider), currentModelLabel(ts.currentModel))
 	if !preset.NoAPIKey {
@@ -241,13 +286,13 @@ func (ts *tuiState) showModels(provider, backPage string) {
 	modelList.SetTitle(" Models ")
 	for _, model := range models {
 		label := model
-		if model == defaultSelectionModel(ts.cfg, provider, ts.currentProvider, ts.currentModel) {
+		if model == defaultSelectionModelForAgent(ts.cfg, ts.agent, provider, ts.currentProvider, ts.currentModel) {
 			label += " [default]"
 		}
 		modelName := model
 		modelList.AddItem(label, "", 0, func() {
-			preset, _ := resolveProviderPreset(provider, ts.cfg)
-			if !preset.NoAPIKey && !hasConfigurableKey(strings.TrimSpace(ts.cfg.Providers[provider].APIKey), ts.typedAPIKeys[provider], ts.resetKeys[provider]) {
+			preset, _ := resolveAgentProviderPreset(ts.agent, provider, ts.cfg)
+			if !preset.NoAPIKey && !hasConfigurableKey(storedAPIKeyForAgent(ts.cfg, ts.agent, provider), ts.typedAPIKeys[provider], ts.resetKeys[provider]) {
 				ts.showKeyForm(provider, backPage, func() {
 					ts.showModels(provider, backPage)
 				})
@@ -259,7 +304,7 @@ func (ts *tuiState) showModels(provider, backPage string) {
 	modelList.AddItem("Custom model...", "", 0, func() {
 		ts.showCustomModelForm(provider)
 	})
-	selectedIndex := modelIndex(ts.cfg, provider, ts.currentProvider, ts.currentModel)
+	selectedIndex := modelIndexForAgent(ts.cfg, ts.agent, provider, ts.currentProvider, ts.currentModel)
 	if customModel := strings.TrimSpace(ts.customModels[provider]); customModel != "" {
 		selectedIndex = 0
 	}
@@ -402,6 +447,7 @@ func (ts *tuiState) showCustomProviderForm() {
 			return
 		}
 		ts.result = ConfigureSelection{
+			Agent:    string(ts.agent),
 			Provider: uniqueCustomProviderKey(ts.cfg, makeCustomProviderKey(nameValue)),
 			Name:     nameValue,
 			BaseURL:  baseURLValue,
@@ -427,8 +473,68 @@ func (ts *tuiState) showCustomProviderForm() {
 	ts.app.SetFocus(form)
 }
 
-func runArrowTUI(cfg *AppConfig, currentProvider, currentModel string) (ConfigureSelection, error) {
-	names := sortedProviderNames(cfg, true)
+func (ts *tuiState) showAgents() {
+	agentList := tview.NewList()
+	agentList.ShowSecondaryText(false)
+	agentList.SetBorder(true)
+	agentList.SetTitle(" Agents ")
+	agents := []AgentName{agentClaude, agentCodex}
+	for _, agent := range agents {
+		agentName := agent
+		agentList.AddItem(agentDisplayName(agentName), "", 0, func() {
+			ts.agent = agentName
+			ts.selectedProvider = ""
+			ts.showProviders()
+		})
+	}
+	agentList.SetDoneFunc(func() {
+		ts.app.Stop()
+	})
+	agentList.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEscape || event.Rune() == 'q' || event.Rune() == 'Q' {
+			ts.app.Stop()
+			return nil
+		}
+		return event
+	})
+	ts.pages.AddAndSwitchToPage("agents", agentList, true)
+	ts.app.SetFocus(agentList)
+}
+
+func (ts *tuiState) showRestoreConfirm() {
+	confirm := tview.NewList()
+	confirm.ShowSecondaryText(false)
+	confirm.SetBorder(true)
+	confirm.SetTitle(" Restore Official Config ")
+	confirm.AddItem("Restore", "", 'r', func() {
+		ts.result = ConfigureSelection{
+			Agent:    string(ts.agent),
+			Provider: restoreProviderOption,
+		}
+		ts.resultErr = nil
+		ts.app.Stop()
+	})
+	confirm.AddItem("Cancel", "", 'c', ts.showProviders)
+	confirm.SetDoneFunc(ts.showProviders)
+	confirm.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEscape || event.Rune() == 'q' || event.Rune() == 'Q' {
+			ts.showProviders()
+			return nil
+		}
+		return event
+	})
+	help := tview.NewTextView()
+	help.SetText(agentDisplayName(ts.agent))
+	page := tview.NewFlex()
+	page.SetDirection(tview.FlexRow)
+	page.AddItem(help, 1, 0, false)
+	page.AddItem(confirm, 0, 1, true)
+	ts.pages.AddAndSwitchToPage("restore", page, true)
+	ts.app.SetFocus(confirm)
+}
+
+func runArrowTUI(cfg *AppConfig, agent AgentName, selectAgent bool, currentProvider, currentModel string) (ConfigureSelection, error) {
+	names := providerNamesForAgent(agent, cfg, agent == agentClaude, true)
 	if len(names) == 0 {
 		return ConfigureSelection{}, errors.New("no providers configured")
 	}
@@ -445,6 +551,8 @@ func runArrowTUI(cfg *AppConfig, currentProvider, currentModel string) (Configur
 		app:              tview.NewApplication(),
 		pages:            tview.NewPages(),
 		cfg:              cfg,
+		agent:            agent,
+		selectAgent:      selectAgent,
 		currentProvider:  currentProvider,
 		currentModel:     currentModel,
 		names:            names,
@@ -458,7 +566,7 @@ func runArrowTUI(cfg *AppConfig, currentProvider, currentModel string) (Configur
 	ts.providerList = tview.NewList()
 	ts.providerList.ShowSecondaryText(true)
 	ts.providerList.SetBorder(true)
-	ts.providerList.SetTitle(" Providers ")
+	ts.providerList.SetTitle(" " + agentDisplayName(ts.agent) + " Providers ")
 
 	providerHelp := tview.NewTextView()
 	providerHelp.SetText("Enter/→ details   q/esc quit")
@@ -476,17 +584,21 @@ func runArrowTUI(cfg *AppConfig, currentProvider, currentModel string) (Configur
 	ts.detailText.SetTitle(" Provider Details ")
 
 	ts.providerList.SetChangedFunc(func(index int, mainText, secondaryText string, shortcut rune) {
-		if index >= 0 && index < len(names) {
-			ts.selectedProvider = names[index]
+		if index >= 0 && index < len(ts.names) {
+			ts.selectedProvider = ts.names[index]
 		}
 	})
 	ts.providerList.SetSelectedFunc(func(index int, mainText, secondaryText string, shortcut rune) {
-		if index < 0 || index >= len(names) {
+		if index < 0 || index >= len(ts.names) {
 			return
 		}
-		ts.selectedProvider = names[index]
+		ts.selectedProvider = ts.names[index]
 		if ts.selectedProvider == customProviderOption {
 			ts.showCustomProviderForm()
+			return
+		}
+		if ts.selectedProvider == restoreProviderOption {
+			ts.showRestoreConfirm()
 			return
 		}
 		ts.showDetail(ts.selectedProvider, "providers")
@@ -498,10 +610,12 @@ func runArrowTUI(cfg *AppConfig, currentProvider, currentModel string) (Configur
 		switch {
 		case event.Key() == tcell.KeyRight:
 			index := ts.providerList.GetCurrentItem()
-			if index >= 0 && index < len(names) {
-				ts.selectedProvider = names[index]
+			if index >= 0 && index < len(ts.names) {
+				ts.selectedProvider = ts.names[index]
 				if ts.selectedProvider == customProviderOption {
 					ts.showCustomProviderForm()
+				} else if ts.selectedProvider == restoreProviderOption {
+					ts.showRestoreConfirm()
 				} else {
 					ts.showDetail(ts.selectedProvider, "providers")
 				}
@@ -525,7 +639,11 @@ func runArrowTUI(cfg *AppConfig, currentProvider, currentModel string) (Configur
 		}
 		return event
 	})
-	ts.showProviders()
+	if ts.selectAgent {
+		ts.showAgents()
+	} else {
+		ts.showProviders()
+	}
 	if err := ts.app.Run(); err != nil {
 		return ConfigureSelection{}, err
 	}
@@ -535,17 +653,21 @@ func runArrowTUI(cfg *AppConfig, currentProvider, currentModel string) (Configur
 	return ts.result, nil
 }
 
-func promptConfigureSelectionFallback(reader *bufio.Reader, out io.Writer, cfg *AppConfig, currentProvider, currentModel string) (ConfigureSelection, error) {
-	names := sortedProviderNames(cfg, true)
+func promptConfigureSelectionFallback(reader *bufio.Reader, out io.Writer, cfg *AppConfig, agent AgentName, currentProvider, currentModel string) (ConfigureSelection, error) {
+	names := providerNamesForAgent(agent, cfg, agent == agentClaude, true)
 
 	for {
-		fmt.Fprintln(out, "Providers:")
+		fmt.Fprintf(out, "%s providers:\n", agentDisplayName(agent))
 		for i, name := range names {
 			if name == customProviderOption {
 				fmt.Fprintf(out, "  %d) custom...\n", i+1)
 				continue
 			}
-			preset, err := resolveProviderPreset(name, cfg)
+			if name == restoreProviderOption {
+				fmt.Fprintf(out, "  %d) Restore official config...\n", i+1)
+				continue
+			}
+			preset, err := resolveAgentProviderPreset(agent, name, cfg)
 			if err != nil {
 				continue
 			}
@@ -565,8 +687,11 @@ func promptConfigureSelectionFallback(reader *bufio.Reader, out io.Writer, cfg *
 			if provider == customProviderOption {
 				return promptCustomProviderFallback(reader, out, cfg)
 			}
+			if provider == restoreProviderOption {
+				return ConfigureSelection{Agent: string(agent), Provider: restoreProviderOption}, nil
+			}
 
-			defaultModel := defaultSelectionModel(cfg, provider, currentProvider, currentModel)
+			defaultModel := defaultSelectionModelForAgent(cfg, agent, provider, currentProvider, currentModel)
 
 			fmt.Fprintf(out, "Model (default: %s): ", defaultModel)
 			modelText, err := readLine(reader)
@@ -579,6 +704,7 @@ func promptConfigureSelectionFallback(reader *bufio.Reader, out io.Writer, cfg *
 			}
 
 			return ConfigureSelection{
+				Agent:    string(agent),
 				Provider: provider,
 				Model:    modelText,
 			}, nil
@@ -702,15 +828,25 @@ func resolveProviderSelection(input string, names []string) (string, error) {
 	if provider == "custom" || provider == "custom..." {
 		return customProviderOption, nil
 	}
-	if _, ok := providerPresets[provider]; !ok {
-		for _, name := range names {
-			if name == provider {
-				return provider, nil
-			}
-		}
-		return "", errors.New("unsupported provider")
+	if provider == "restore" || provider == "restore official config" || provider == "restore official config..." {
+		return restoreProviderOption, nil
 	}
-	return provider, nil
+	for _, name := range names {
+		if name == provider {
+			return provider, nil
+		}
+	}
+	return "", errors.New("unsupported provider")
+}
+
+func flagWasProvided(fs *flag.FlagSet, name string) bool {
+	found := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			found = true
+		}
+	})
+	return found
 }
 
 func shouldUseArrowTUI(in *os.File) bool {

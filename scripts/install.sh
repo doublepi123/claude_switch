@@ -2,7 +2,7 @@
 
 set -eu
 
-PROJECT_NAME='claude-switch'
+PROJECT_NAME='code-switch'
 COMMAND_NAME='cs'
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)

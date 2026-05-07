@@ -34,7 +34,7 @@ func cmdUpgrade(args []string, out io.Writer) error {
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: claude-switch upgrade [--tag vX.Y.Z] [--install-path PATH]")
+		return errors.New("usage: code-switch upgrade [--tag vX.Y.Z] [--install-path PATH]")
 	}
 
 	target := strings.TrimSpace(*installPath)
@@ -98,7 +98,7 @@ func performUpgrade(opts upgradeOptions) error {
 		}
 	}
 	if shouldSkipUpgrade(version, targetTag) {
-		fmt.Fprintf(opts.out, "claude-switch is already up to date (%s)\n", version)
+		fmt.Fprintf(opts.out, "code-switch is already up to date (%s)\n", version)
 		return nil
 	}
 	if strings.TrimSpace(version) != "" && version != "dev" {
@@ -115,7 +115,7 @@ func performUpgrade(opts upgradeOptions) error {
 		return nil
 	}
 
-	tmpDir, err := os.MkdirTemp("", "claude-switch-upgrade-*")
+	tmpDir, err := os.MkdirTemp("", "code-switch-upgrade-*")
 	if err != nil {
 		return err
 	}
@@ -159,7 +159,7 @@ func performUpgrade(opts upgradeOptions) error {
 		return err
 	}
 
-	fmt.Fprintf(opts.out, "upgraded claude-switch to latest release\n")
+	fmt.Fprintf(opts.out, "upgraded code-switch to latest release\n")
 	return nil
 }
 
@@ -169,7 +169,7 @@ func latestReleaseTag(ctx context.Context, client *http.Client, baseURL, repo st
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("User-Agent", "claude-switch/"+version)
+	req.Header.Set("User-Agent", "code-switch/"+version)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -300,9 +300,9 @@ func upgradeAssetName(goos, goarch string) (string, error) {
 
 	switch goos {
 	case "darwin", "linux":
-		return fmt.Sprintf("claude-switch-%s-%s.tar.gz", goos, goarch), nil
+		return fmt.Sprintf("code-switch-%s-%s.tar.gz", goos, goarch), nil
 	case "windows":
-		return fmt.Sprintf("claude-switch-%s-%s.zip", goos, goarch), nil
+		return fmt.Sprintf("code-switch-%s-%s.zip", goos, goarch), nil
 	default:
 		return "", fmt.Errorf("unsupported OS for upgrade: %s", goos)
 	}
@@ -323,7 +323,7 @@ func downloadFile(ctx context.Context, client *http.Client, downloadURL, dest st
 	if err != nil {
 		return err
 	}
-	req.Header.Set("User-Agent", "claude-switch/"+version)
+	req.Header.Set("User-Agent", "code-switch/"+version)
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -438,14 +438,14 @@ func replaceExecutable(src, target string) error {
 	if err := moveFile(src, target); err != nil {
 		if renamedExisting {
 			if rbErr := os.Rename(backup, target); rbErr != nil {
-				fmt.Fprintf(os.Stderr, "claude-switch: upgrade failed; rollback also failed (%v). Old binary saved at %s\n", rbErr, backup)
+				fmt.Fprintf(os.Stderr, "code-switch: upgrade failed; rollback also failed (%v). Old binary saved at %s\n", rbErr, backup)
 			}
 		}
 		return fmt.Errorf("install upgraded executable: %w", err)
 	}
 	if renamedExisting {
 		if err := os.Remove(backup); err != nil {
-			fmt.Fprintf(os.Stderr, "claude-switch: warning: could not remove backup %s: %v\n", backup, err)
+			fmt.Fprintf(os.Stderr, "code-switch: warning: could not remove backup %s: %v\n", backup, err)
 		}
 	}
 	return nil
@@ -460,7 +460,7 @@ func moveFile(src, target string) error {
 		return fmt.Errorf("move %s to %s: %w", src, target, err)
 	}
 	if err := os.Remove(src); err != nil {
-		fmt.Fprintf(os.Stderr, "claude-switch: warning: could not remove temp file %s: %v\n", src, err)
+		fmt.Fprintf(os.Stderr, "code-switch: warning: could not remove temp file %s: %v\n", src, err)
 	}
 	return nil
 }
@@ -550,7 +550,7 @@ func downloadChecksumContent(ctx context.Context, client *http.Client, urlStr st
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("User-Agent", "claude-switch/"+version)
+	req.Header.Set("User-Agent", "code-switch/"+version)
 
 	resp, err := client.Do(req)
 	if err != nil {

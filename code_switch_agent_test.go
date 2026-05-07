@@ -1,0 +1,371 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestLoadAppConfigMigratesClaudeSwitchConfigToCodeSwitch(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	oldPath := filepath.Join(home, ".claude-switch", "config.json")
+	oldCfg := AppConfig{
+		Providers: map[string]StoredProvider{
+			"minimax":      {APIKey: "sk-mini", Model: "MiniMax-M2.7"},
+			"ollama-cloud": {APIKey: "ollama-sk", Model: "qwen3-coder:480b"},
+		},
+	}
+	if err := writeJSONAtomic(oldPath, oldCfg); err != nil {
+		t.Fatalf("write old config: %v", err)
+	}
+
+	cfg, path, err := loadAppConfig()
+	if err != nil {
+		t.Fatalf("loadAppConfig returned error: %v", err)
+	}
+
+	newPath := filepath.Join(home, ".code-switch", "config.json")
+	if path != newPath {
+		t.Fatalf("config path = %q, want %q", path, newPath)
+	}
+	if _, err := os.Stat(oldPath); err != nil {
+		t.Fatalf("old config should remain untouched: %v", err)
+	}
+	if _, err := os.Stat(newPath); err != nil {
+		t.Fatalf("new config was not written: %v", err)
+	}
+	if _, ok := cfg.Providers["minimax"]; ok {
+		t.Fatalf("legacy minimax key should be migrated away")
+	}
+	if got := cfg.Providers["minimax-cn"].APIKey; got != "sk-mini" {
+		t.Fatalf("migrated minimax-cn key = %q, want %q", got, "sk-mini")
+	}
+}
+
+func TestLoadAppConfigPrefersCodeSwitchConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	oldPath := filepath.Join(home, ".claude-switch", "config.json")
+	newPath := filepath.Join(home, ".code-switch", "config.json")
+	if err := writeJSONAtomic(oldPath, AppConfig{Providers: map[string]StoredProvider{"openrouter": {APIKey: "old"}}}); err != nil {
+		t.Fatalf("write old config: %v", err)
+	}
+	if err := writeJSONAtomic(newPath, AppConfig{Providers: map[string]StoredProvider{"deepseek": {APIKey: "new"}}}); err != nil {
+		t.Fatalf("write new config: %v", err)
+	}
+
+	cfg, path, err := loadAppConfig()
+	if err != nil {
+		t.Fatalf("loadAppConfig returned error: %v", err)
+	}
+	if path != newPath {
+		t.Fatalf("config path = %q, want %q", path, newPath)
+	}
+	if _, ok := cfg.Providers["openrouter"]; ok {
+		t.Fatalf("old config should not be merged when new config exists")
+	}
+	if got := cfg.Providers["deepseek"].APIKey; got != "new" {
+		t.Fatalf("new config key = %q, want %q", got, "new")
+	}
+}
+
+func TestCodexSwitchWritesResponsesConfigAndStoresAgentKey(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	codexDir := filepath.Join(home, ".codex")
+
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"switch", "ollama-cloud", "--agent", "codex", "--api-key", "ollama-sk", "--model", "qwen3-coder:480b", "--codex-dir", codexDir}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("codex switch returned error: %v", err)
+	}
+
+	configBytes, err := os.ReadFile(filepath.Join(codexDir, "config.toml"))
+	if err != nil {
+		t.Fatalf("read codex config: %v", err)
+	}
+	config := string(configBytes)
+	for _, want := range []string{
+		`model = "qwen3-coder:480b"`,
+		`model_provider = "ollama-cloud"`,
+		`[model_providers.ollama-cloud]`,
+		`name = "Ollama Cloud"`,
+		`base_url = "https://ollama.com/v1"`,
+		`env_key = "OLLAMA_API_KEY"`,
+		`wire_api = "responses"`,
+	} {
+		if !strings.Contains(config, want) {
+			t.Fatalf("codex config missing %q:\n%s", want, config)
+		}
+	}
+	if strings.Contains(config, "ollama-sk") {
+		t.Fatalf("codex config must not contain plaintext api key:\n%s", config)
+	}
+	if strings.Contains(config, `wire_api = "chat"`) {
+		t.Fatalf("codex config must not use chat wire api:\n%s", config)
+	}
+
+	appBytes, err := os.ReadFile(filepath.Join(home, ".code-switch", "config.json"))
+	if err != nil {
+		t.Fatalf("read app config: %v", err)
+	}
+	var cfg AppConfig
+	if err := json.Unmarshal(appBytes, &cfg); err != nil {
+		t.Fatalf("unmarshal app config: %v", err)
+	}
+	if got := cfg.Agents["codex"].Providers["ollama-cloud"].APIKey; got != "ollama-sk" {
+		t.Fatalf("codex stored key = %q, want %q", got, "ollama-sk")
+	}
+	if _, ok := cfg.Providers["ollama-cloud"]; ok {
+		t.Fatalf("codex switch should not write top-level claude provider config")
+	}
+}
+
+func TestCodexSwitchCanReuseMigratedClaudeOllamaCloudKey(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	oldCfg := AppConfig{Providers: map[string]StoredProvider{"ollama-cloud": {APIKey: "old-ollama-sk"}}}
+	if err := writeJSONAtomic(filepath.Join(home, ".claude-switch", "config.json"), oldCfg); err != nil {
+		t.Fatalf("write old config: %v", err)
+	}
+
+	if err := runWithIO([]string{"switch", "ollama-cloud", "--agent", "codex", "--codex-dir", filepath.Join(home, ".codex")}, strings.NewReader(""), &bytes.Buffer{}); err != nil {
+		t.Fatalf("codex switch returned error: %v", err)
+	}
+}
+
+func TestCodexConfigureFallbackWritesConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	codexDir := filepath.Join(home, ".codex")
+
+	input := strings.NewReader("ollama-cloud\n\nollama-sk\n")
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"configure", "--agent", "codex", "--codex-dir", codexDir}, input, output); err != nil {
+		t.Fatalf("codex configure returned error: %v", err)
+	}
+
+	configBytes, err := os.ReadFile(filepath.Join(codexDir, "config.toml"))
+	if err != nil {
+		t.Fatalf("read codex config: %v", err)
+	}
+	if !strings.Contains(string(configBytes), `model_provider = "ollama-cloud"`) {
+		t.Fatalf("codex config missing provider:\n%s", string(configBytes))
+	}
+
+	appBytes, err := os.ReadFile(filepath.Join(home, ".code-switch", "config.json"))
+	if err != nil {
+		t.Fatalf("read app config: %v", err)
+	}
+	var cfg AppConfig
+	if err := json.Unmarshal(appBytes, &cfg); err != nil {
+		t.Fatalf("unmarshal app config: %v", err)
+	}
+	if got := cfg.Agents["codex"].Providers["ollama-cloud"].APIKey; got != "ollama-sk" {
+		t.Fatalf("codex stored key = %q, want %q", got, "ollama-sk")
+	}
+	if !strings.Contains(output.String(), "switched Codex to Ollama Cloud") {
+		t.Fatalf("expected codex switch output, got %q", output.String())
+	}
+}
+
+func TestCodexCurrentReadsConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	codexDir := filepath.Join(home, ".codex")
+	if err := os.MkdirAll(codexDir, 0o755); err != nil {
+		t.Fatalf("mkdir codex dir: %v", err)
+	}
+	config := `model = "qwen3-coder:480b"
+model_provider = "ollama-cloud"
+
+[model_providers.ollama-cloud]
+base_url = "https://ollama.com/v1"
+`
+	if err := os.WriteFile(filepath.Join(codexDir, "config.toml"), []byte(config), 0o644); err != nil {
+		t.Fatalf("write codex config: %v", err)
+	}
+
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"current", "--agent", "codex", "--codex-dir", codexDir}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("codex current returned error: %v", err)
+	}
+	out := output.String()
+	for _, want := range []string{"provider: ollama-cloud", "base_url: https://ollama.com/v1", "model: qwen3-coder:480b"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("current output missing %q: %q", want, out)
+		}
+	}
+}
+
+func TestCodexRestoreRemovesOnlyManagedSettings(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	codexDir := filepath.Join(home, ".codex")
+	configPath := filepath.Join(codexDir, "config.toml")
+	if err := os.MkdirAll(codexDir, 0o755); err != nil {
+		t.Fatalf("mkdir codex dir: %v", err)
+	}
+	initial := `approval_policy = "on-request"
+model = "qwen3-coder:480b"
+model_provider = "ollama-cloud"
+
+[model_providers.ollama-cloud]
+name = "Ollama Cloud"
+base_url = "https://ollama.com/v1"
+env_key = "OLLAMA_API_KEY"
+wire_api = "responses"
+
+[profiles.work]
+model = "gpt-5.5"
+model_provider = "openai"
+`
+	if err := os.WriteFile(configPath, []byte(initial), 0o644); err != nil {
+		t.Fatalf("write codex config: %v", err)
+	}
+
+	if err := runWithIO([]string{"restore", "--agent", "codex", "--codex-dir", codexDir}, strings.NewReader(""), &bytes.Buffer{}); err != nil {
+		t.Fatalf("codex restore returned error: %v", err)
+	}
+
+	restoredBytes, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read restored codex config: %v", err)
+	}
+	restored := string(restoredBytes)
+	for _, unwanted := range []string{`model_provider = "ollama-cloud"`, `model = "qwen3-coder:480b"`, `[model_providers.ollama-cloud]`, `wire_api = "responses"`} {
+		if strings.Contains(restored, unwanted) {
+			t.Fatalf("restored codex config still contains %q:\n%s", unwanted, restored)
+		}
+	}
+	for _, want := range []string{`approval_policy = "on-request"`, `[profiles.work]`, `model = "gpt-5.5"`, `model_provider = "openai"`} {
+		if !strings.Contains(restored, want) {
+			t.Fatalf("restored codex config lost %q:\n%s", want, restored)
+		}
+	}
+}
+
+func TestClaudeRestoreRemovesManagedEnvOnly(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	claudeDir := filepath.Join(home, ".claude")
+	settingsPath := filepath.Join(claudeDir, "settings.json")
+	root := map[string]any{
+		"permissions": map[string]any{"allow": []any{"Bash(go test ./...)"}},
+		"env": map[string]any{
+			"ANTHROPIC_BASE_URL":   "https://api.deepseek.com/anthropic",
+			"ANTHROPIC_MODEL":      "deepseek-v4-pro[1m]",
+			"ANTHROPIC_AUTH_TOKEN": "sk-deepseek",
+			"UNMANAGED":            "keep",
+		},
+	}
+	if err := writeJSONAtomic(settingsPath, root); err != nil {
+		t.Fatalf("write settings: %v", err)
+	}
+
+	if err := runWithIO([]string{"restore", "--agent", "claude", "--claude-dir", claudeDir}, strings.NewReader(""), &bytes.Buffer{}); err != nil {
+		t.Fatalf("claude restore returned error: %v", err)
+	}
+
+	restoredBytes, err := os.ReadFile(settingsPath)
+	if err != nil {
+		t.Fatalf("read settings: %v", err)
+	}
+	var restored map[string]any
+	if err := json.Unmarshal(restoredBytes, &restored); err != nil {
+		t.Fatalf("unmarshal settings: %v", err)
+	}
+	env := restored["env"].(map[string]any)
+	if got := env["UNMANAGED"]; got != "keep" {
+		t.Fatalf("unmanaged env = %v, want keep", got)
+	}
+	if _, ok := env["ANTHROPIC_BASE_URL"]; ok {
+		t.Fatalf("managed env key was not removed")
+	}
+	if _, ok := restored["permissions"]; !ok {
+		t.Fatalf("unrelated settings were not preserved")
+	}
+}
+
+func TestCodexProviderTestUsesResponsesEndpoint(t *testing.T) {
+	var gotPath string
+	var gotAuth string
+	var gotBody string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotAuth = r.Header.Get("Authorization")
+		body, _ := io.ReadAll(r.Body)
+		gotBody = string(body)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"id":"resp_test"}`))
+	}))
+	defer server.Close()
+
+	output := &bytes.Buffer{}
+	preset := codexOllamaCloudPreset()
+	preset.BaseURL = server.URL
+	if err := testCodexProviderWithClient(context.Background(), output, preset, "ollama-sk", server.Client()); err != nil {
+		t.Fatalf("testCodexProviderWithClient returned error: %v", err)
+	}
+
+	if gotPath != "/v1/responses" {
+		t.Fatalf("path = %q, want /v1/responses", gotPath)
+	}
+	if gotAuth != "Bearer ollama-sk" {
+		t.Fatalf("authorization = %q, want bearer token", gotAuth)
+	}
+	if !strings.Contains(gotBody, `"input":"Say hi"`) {
+		t.Fatalf("responses request body = %s", gotBody)
+	}
+}
+
+func TestAgentFlagsAndRenameSurfaces(t *testing.T) {
+	if got, want := defaultUpgradeRepo, "doublepi123/code_switch"; got != want {
+		t.Fatalf("defaultUpgradeRepo = %q, want %q", got, want)
+	}
+	if got, want := upgradeAssetName("linux", "amd64"); got != "code-switch-linux-amd64.tar.gz" || want != nil {
+		t.Fatalf("upgradeAssetName linux/amd64 = %q, %v", got, want)
+	}
+
+	oldVersion := version
+	version = "v-test"
+	t.Cleanup(func() { version = oldVersion })
+	output := &bytes.Buffer{}
+	if err := runWithIO([]string{"--version"}, strings.NewReader(""), output); err != nil {
+		t.Fatalf("version returned error: %v", err)
+	}
+	if got, want := output.String(), "code-switch v-test\n"; got != want {
+		t.Fatalf("version output = %q, want %q", got, want)
+	}
+}
+
+func TestCodexListAndTUIProviderNamesIncludeRestore(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	output := &bytes.Buffer{}
+	if err := cmdList([]string{"--agent", "codex"}, output); err != nil {
+		t.Fatalf("cmdList codex returned error: %v", err)
+	}
+	out := output.String()
+	if !strings.Contains(out, "ollama-cloud") {
+		t.Fatalf("codex list missing ollama-cloud: %q", out)
+	}
+	if strings.Contains(out, "openrouter") || strings.Contains(out, "deepseek") {
+		t.Fatalf("codex list should not include Claude providers: %q", out)
+	}
+
+	names := providerNamesForAgent(agentCodex, &AppConfig{Providers: map[string]StoredProvider{}}, false, true)
+	if len(names) != 2 || names[0] != "ollama-cloud" || names[1] != restoreProviderOption {
+		t.Fatalf("codex TUI provider names = %v", names)
+	}
+}

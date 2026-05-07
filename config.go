@@ -13,6 +13,14 @@ func appConfigPath() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return filepath.Join(home, ".code-switch", "config.json"), nil
+}
+
+func legacyAppConfigPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
 	return filepath.Join(home, ".claude-switch", "config.json"), nil
 }
 
@@ -36,15 +44,36 @@ func loadAppConfig() (*AppConfig, string, error) {
 	cfg := &AppConfig{Providers: map[string]StoredProvider{}}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return cfg, path, nil
+		if !os.IsNotExist(err) {
+			return nil, "", err
 		}
-		return nil, "", err
+		legacyPath, legacyErr := legacyAppConfigPath()
+		if legacyErr != nil {
+			return nil, "", legacyErr
+		}
+		legacyData, legacyReadErr := os.ReadFile(legacyPath)
+		if legacyReadErr != nil {
+			if os.IsNotExist(legacyReadErr) {
+				ensureAppConfigMaps(cfg)
+				return cfg, path, nil
+			}
+			return nil, "", legacyReadErr
+		}
+		if err := json.Unmarshal(legacyData, cfg); err != nil {
+			return nil, "", fmt.Errorf("parse %s: %w", legacyPath, err)
+		}
+		migrateLegacyProviders(cfg)
+		ensureAppConfigMaps(cfg)
+		if err := writeJSONAtomic(path, cfg); err != nil {
+			return nil, "", err
+		}
+		return cfg, path, nil
 	}
 	if err := json.Unmarshal(data, cfg); err != nil {
 		return nil, "", fmt.Errorf("parse %s: %w", path, err)
 	}
 	migrateLegacyProviders(cfg)
+	ensureAppConfigMaps(cfg)
 	return cfg, path, nil
 }
 
@@ -156,6 +185,10 @@ func backupIfExists(path string) error {
 }
 
 func upsertProviderConfig(cfg *AppConfig, selection ConfigureSelection, apiKey string) {
+	if selection.Agent == string(agentCodex) {
+		upsertAgentProviderConfig(cfg, agentCodex, selection, apiKey)
+		return
+	}
 	stored := cfg.Providers[selection.Provider]
 	stored.APIKey = apiKey
 	stored.Model = strings.TrimSpace(selection.Model)
@@ -167,6 +200,19 @@ func upsertProviderConfig(cfg *AppConfig, selection ConfigureSelection, apiKey s
 		stored.BaseURL = strings.TrimSpace(selection.BaseURL)
 	}
 	cfg.Providers[selection.Provider] = stored
+}
+
+func upsertAgentProviderConfig(cfg *AppConfig, agent AgentName, selection ConfigureSelection, apiKey string) {
+	stored := codexProviderConfig(cfg, selection.Provider)
+	stored.APIKey = apiKey
+	stored.Model = strings.TrimSpace(selection.Model)
+	if selection.Name != "" {
+		stored.Name = strings.TrimSpace(selection.Name)
+	}
+	if selection.BaseURL != "" {
+		stored.BaseURL = strings.TrimSpace(selection.BaseURL)
+	}
+	setAgentProviderConfig(cfg, agent, selection.Provider, stored)
 }
 
 func currentConfiguredProvider(cfg *AppConfig, claudeDir string) (string, string) {
